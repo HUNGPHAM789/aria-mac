@@ -170,7 +170,7 @@ async function executeStep(
   context: string,
   systemPrompt: string,
   opts: TaskRunnerOptions,
-): Promise<{ text: string; usedTools: boolean }> {
+): Promise<{ text: string; usedTools: boolean; toolOutput?: string }> {
   const stepPrompt = `You are on step ${step.index} of ${totalSteps}.
 
 TASK FOR THIS STEP: ${step.description}
@@ -200,7 +200,7 @@ Do NOT plan future steps — just do THIS step.`;
     response.text.includes('Wrote') ||
     response.text.length > 50; // If substantial response, likely did something
 
-  return { text: response.text, usedTools };
+  return { text: response.text, usedTools, toolOutput: response.lastToolOutput };
 }
 
 // ─── Completion Judge ──────────────────────────────────────────────────────
@@ -496,7 +496,7 @@ export async function executePlan(planResult: PlanModeResult): Promise<ClaudeRes
     let attempts = 0;
     while (attempts < maxRetries) {
       attempts++;
-      let result: { text: string; usedTools: boolean };
+      let result: { text: string; usedTools: boolean; toolOutput?: string };
       try {
         result = await Promise.race([
           executeStep(step, plan.length, context, opts.systemPrompt, opts),
@@ -510,10 +510,13 @@ export async function executePlan(planResult: PlanModeResult): Promise<ClaudeRes
       }
 
       const judgment = judgeStepCompletion(result.text);
+      const toolOutBlock = result.toolOutput
+        ? `\n  Last tool output (use this directly, don't re-fetch):\n${result.toolOutput.slice(0, 2000)}`
+        : '';
       if (judgment === 'done' || (judgment === 'unclear' && result.usedTools)) {
         step.status = 'done';
         step.result = result.text;
-        context += `\nStep ${step.index}:\n${result.text.slice(0, 2000)}\n`;
+        context += `\nStep ${step.index}:\n${result.text.slice(0, 800)}${toolOutBlock}\n`;
         break;
       } else if (judgment === 'failed' && attempts < maxRetries) {
         opts.onStream?.({ type: 'text', text: `⚠️ Step ${step.index} issue, retrying...\n` });
@@ -521,7 +524,7 @@ export async function executePlan(planResult: PlanModeResult): Promise<ClaudeRes
       } else {
         step.status = 'failed';
         step.result = result.text;
-        context += `\nStep ${step.index} FAILED: ${result.text.slice(0, 300)}\n`;
+        context += `\nStep ${step.index} FAILED: ${result.text.slice(0, 300)}${toolOutBlock}\n`;
         break;
       }
     }
@@ -605,7 +608,7 @@ export async function runTask(
     while (attempts < maxRetries) {
       attempts++;
 
-      let result: { text: string; usedTools: boolean };
+      let result: { text: string; usedTools: boolean; toolOutput?: string };
       try {
         result = await Promise.race([
           executeStep(step, steps.length, context, opts.systemPrompt, opts),
@@ -621,12 +624,15 @@ export async function runTask(
       }
 
       const judgment = judgeStepCompletion(result.text);
+      const toolOutBlock = result.toolOutput
+        ? `\n  Last tool output (use this directly, don't re-fetch):\n${result.toolOutput.slice(0, 2000)}`
+        : '';
 
       if (judgment === 'done' || (judgment === 'unclear' && result.usedTools)) {
         step.status = 'done';
         step.result = result.text;
-        // Pass full result (up to 2KB) so next step has tool output context
-        context += `\nStep ${step.index} (${step.description}):\n${result.text.slice(0, 2000)}\n`;
+        // Pass summary + concrete tool output so next step has data, not just prose
+        context += `\nStep ${step.index} (${step.description}):\n${result.text.slice(0, 800)}${toolOutBlock}\n`;
         break;
       } else if (judgment === 'failed' && attempts < maxRetries) {
         console.log(`[task-runner] Step ${step.index} failed (attempt ${attempts}/${maxRetries}), retrying...`);
