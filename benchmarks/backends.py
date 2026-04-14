@@ -56,10 +56,19 @@ def call_aria(prompt: str, timeout: int = 180) -> dict:
 # Matches the lines that make up Hermes's banner box in -Q mode
 _HERMES_BANNER_LINE = re.compile(r"^[\s]*[│╭╰╯─╮]")
 _HERMES_SESSION_LINE = re.compile(r"^\s*session_id:\s*(\S+)\s*$")
+# Hermes tool-preview lines that leak through even in -Q mode:
+#   "┊ 🔎 preparing search_files…"
+#   "┊ 💻 preparing terminal…"
+#   "┊ 🌐 preparing browser_navigate…"
+_HERMES_TOOL_PREVIEW = re.compile(r"^\s*┊\s")
 
 
 def _parse_hermes_output(stdout: str) -> tuple[str, str]:
-    """Return (reply_text, session_id) from hermes -Q stdout."""
+    """Return (reply_text, session_id) from hermes -Q stdout.
+
+    Strips the Hermes banner box, session_id line, and any tool-preview
+    lines (prefixed with `┊`) that leak through -Q mode.
+    """
     reply_lines: list[str] = []
     session_id = ""
     for line in stdout.splitlines():
@@ -68,6 +77,8 @@ def _parse_hermes_output(stdout: str) -> tuple[str, str]:
             session_id = m.group(1)
             continue
         if _HERMES_BANNER_LINE.match(line):
+            continue
+        if _HERMES_TOOL_PREVIEW.match(line):
             continue
         stripped = line.rstrip()
         if stripped:
