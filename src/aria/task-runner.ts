@@ -26,7 +26,7 @@ interface TaskRunnerOptions {
 
 // ─── Task Classification ───────────────────────────────────────────────────
 
-export type TaskType = 'chat' | 'simple-task' | 'complex-task' | 'debug-task';
+export type TaskType = 'chat' | 'analysis-task' | 'simple-task' | 'complex-task' | 'debug-task';
 
 const SIMPLE_PATTERNS = [
   /^(hi|hey|hello|yo|sup|thanks|ok|yes|no|cool|nice)\b/i,
@@ -34,12 +34,21 @@ const SIMPLE_PATTERNS = [
   /\?$/,
 ];
 
+// Analysis/Research — wants INFORMATION, not action
+// Matched FIRST so "check" doesn't become a debug task
+const ANALYSIS_PATTERNS = [
+  /\b(check|verify|investigate|diagnose|analyze|compare|explain|research|report on|look (at|into)|tell me about|show me)\b/i,
+  /\b(why (is|does|did|isn't|doesn't)|what happened|how (does|is|can I))\b/i,
+  /\b(status of|state of|health of|info on)\b/i,
+  /\b(might be (down|broken|failing|stuck|slow))\b/i,
+  /\b(is (there|it|my|the) .* (working|running|configured|correct))\b/i,
+];
+
+// Debug — only fires on EXPLICIT fix intent
 const DEBUG_PATTERNS = [
-  /\b(fix|debug|broken|not working|doesn't work|failed|error|issue|wrong|missing|blank|empty)\b/i,
-  /\b(why (is|does|did|isn't|doesn't)|what happened|check (why|if|the))\b/i,
-  /\b(still|again|yet|anymore)\b.*\b(not|broken|fail|wrong|missing)\b/i,
-  /\b(might be (down|broken|failing|stuck))\b/i,
-  /\b(can you (debug|fix|check|verify|investigate|troubleshoot))/i,
+  /\b(fix|repair|resolve|make .* work|get .* working)\b/i,
+  /\b(broken|not working|doesn't work|failed|failing)\b.*\b(fix|solve|resolve|help)\b/i,
+  /^(fix|debug|repair|resolve)\s+/i,
 ];
 
 const TASK_PATTERNS = [
@@ -57,24 +66,27 @@ const COMPLEX_SIGNALS = [
 export function classifyTask(message: string): TaskType {
   const trimmed = message.trim();
 
-  // 1. Check for Debug patterns first (highest priority, can be short)
-  const debugScore = DEBUG_PATTERNS.filter(p => p.test(trimmed)).length;
-  if (debugScore >= 1) return 'debug-task';
+  // 1. Debug — EXPLICIT fix intent only
+  if (DEBUG_PATTERNS.some(p => p.test(trimmed))) return 'debug-task';
 
-  // 2. Check for Task patterns (can be short, e.g., "Fix it")
-  const taskScore = TASK_PATTERNS.filter(p => p.test(trimmed)).length;
-  if (taskScore >= 1) {
+  // 2. Analysis — wants info/report (check, investigate, compare, diagnose)
+  //    IMPORTANT: runs BEFORE task patterns so "check if X" doesn't become a simple-task
+  if (ANALYSIS_PATTERNS.some(p => p.test(trimmed))) {
+    // But if it's a short question, keep as chat
+    if (message.length < 30 && SIMPLE_PATTERNS.some(p => p.test(trimmed))) return 'chat';
+    return 'analysis-task';
+  }
+
+  // 3. Task — action verbs
+  if (TASK_PATTERNS.some(p => p.test(trimmed))) {
     if (COMPLEX_SIGNALS.some(p => p.test(trimmed)) || message.length > 100) return 'complex-task';
     return 'simple-task';
   }
 
-  // 3. Check for Chat patterns (simple greetings or questions)
+  // 4. Simple chat
   if (SIMPLE_PATTERNS.some(p => p.test(trimmed))) return 'chat';
-
-  // 4. Fallback for very short messages: if it doesn't match anything specific and is tiny, it's just chat
   if (message.length < 10) return 'chat';
 
-  // 5. Default fallback
   return 'chat';
 }
 
@@ -206,6 +218,62 @@ function judgeStepCompletion(text: string): 'done' | 'failed' | 'unclear' {
 }
 
 // ─── Debug Task Runner ─────────────────────────────────────────────────────
+
+// ─── Analysis/Research Runner (READ-ONLY) ──────────────────────────────────
+// For tasks like "check X", "investigate Y", "compare A vs B".
+// NEVER writes, edits, or runs destructive commands. Pure investigate + report.
+async function runAnalysisTask(
+  task: string,
+  opts: TaskRunnerOptions,
+): Promise<ClaudeResponse> {
+  const startedAt = Date.now();
+  console.log(`[task-runner] ANALYSIS mode (read-only): ${task.slice(0, 80)}`);
+
+  opts.onStream?.({ type: 'text', text: '🔍 *Analysis mode — investigating...*\n' });
+
+  const analysisPrompt = `Boss asked: "${task}"
+
+This is an ANALYSIS / RESEARCH request. Boss wants INFORMATION, not action.
+
+STRICT RULES:
+- Use ONLY read-only tools: Read, Glob, Grep, WebFetch, WebSearch, recall, Bash (for safe commands like ls, cat, ps, curl GET, git log/status/diff).
+- DO NOT use Write, Edit, or any Bash command that modifies files, runs git restore/commit/push, npm install, or mutates system state.
+- DO NOT "fix" anything you find. Just investigate and report.
+
+Investigate thoroughly. Use multiple tools if needed. Gather evidence from files, web, commands.
+
+Then produce a structured report:
+📋 **Findings:** What you discovered
+⚠️ **Issues spotted** (if any): Specific problems with evidence
+💡 **Recommendations:** What Boss could do about it
+🎯 **Next action:** End with "Want me to [specific action]? Reply 'do it' and I'll proceed."
+
+Do NOT take any corrective action yourself.`;
+
+  const response = await runClaude(analysisPrompt, opts.systemPrompt, {
+    onStream: opts.onStream,
+    model: opts.model,
+    corr: opts.corr,
+    threadId: opts.threadId,
+    extraTools: opts.extraTools,
+    maxTurns: 15,
+    ephemeral: true,
+  });
+
+  console.log(`[task-runner] Analysis done in ${Date.now() - startedAt}ms`);
+
+  const text = response.text || '❌ Analysis produced no findings.';
+  // Ensure the report ends with a clear next-action prompt
+  const hasNextAction = /reply.*(do it|fix it|proceed|go ahead)/i.test(text);
+  const finalText = hasNextAction ? text : `${text}\n\n_Reply "do it" if you want me to take action on these findings._`;
+
+  return {
+    text: finalText,
+    sessionId: null,
+    actions: [],
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+}
 
 async function runDebugTask(
   task: string,
@@ -496,6 +564,9 @@ export async function runTask(
   const taskType = classifyTask(task);
   console.log(`[task-runner] Classified as: ${taskType}`);
 
+  if (taskType === 'analysis-task') {
+    return runAnalysisTask(task, opts);
+  }
   if (taskType === 'debug-task') {
     return runDebugTask(task, opts);
   }
