@@ -19,6 +19,14 @@ const DANGEROUS_BASH_PATTERNS: RegExp[] = [
   /\bdd\s+.*of=\/dev\//i,
   /\bsudo\s+rm\b/i,
   /\brd\s+\/s\s+\/q\b/i,
+  // ARIA self-protection: block git/npm/mutating operations on own repo
+  /\bgit\s+(restore|reset|checkout\s+--|clean\s+-f|commit|push)/i,
+  /\bgit\s+.*aria-mac/i,
+  // Block npm operations that modify ARIA's dependencies
+  /\bnpm\s+(install|i|add|remove|uninstall|update|upgrade)\b/i,
+  /\b(yarn|pnpm)\s+(add|install|remove|upgrade)\b/i,
+  // Block sed/awk/echo writes to ARIA source
+  /(sed\s+-i|>\s*\S*aria-mac\/(src|identity|package))/i,
 ];
 
 export interface ParsedAction {
@@ -594,11 +602,6 @@ export async function runClaude(
 
   if (!ephemeral) {
     try { dbInsertMessage(sessionId, 'user', message); } catch { /* ignore */ }
-  }
-
-  // Housekeeping: Force GC if available to mitigate slow-growing RSS
-  if (typeof (global as any).gc === 'function') {
-    (global as any).gc();
   }
 
   // Build tool definitions

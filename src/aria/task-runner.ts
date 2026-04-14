@@ -104,6 +104,8 @@ Task: ${task}`;
     corr: opts.corr,
     threadId: opts.threadId,
     maxTurns: 3,
+    ephemeral: true,
+  });
 
   // Parse numbered list from response
   const lines = planResponse.text.split('\n').filter(l => /^\d+[\.\)]\s/.test(l.trim()));
@@ -173,7 +175,9 @@ Do NOT plan future steps — just do THIS step.`;
     corr: opts.corr,
     threadId: opts.threadId,
     extraTools: opts.extraTools,
-    maxTurns: 15, ephemeral: true,
+    maxTurns: 15,
+    ephemeral: true,
+  });
 
   // Check if tools were actually used (response should mention tool results)
   const usedTools = response.text.includes('✅') ||
@@ -370,6 +374,8 @@ Also note any risks or things to verify after.`;
     corr: opts.corr,
     threadId: opts.threadId,
     maxTurns: 3,
+    ephemeral: true,
+  });
 
   console.log(`[task-runner] Design done: ${design.text.length} chars`);
 
@@ -384,11 +390,8 @@ Also note any risks or things to verify after.`;
     : [{ index: 1, description: task, status: 'pending' }];
 
   // ── Phase 3: AUTO-EXECUTE (bypass approval) ──
-  // Plan is shown to Boss for visibility, then executed immediately
   const planText = steps.map(s => `${s.index}. ${s.description}`).join('\n');
   opts.onStream?.({ type: 'text', text: `\n📐 *Plan:*\n${planText}\n\n⚡ Executing...\n` });
-
-  console.log(`[task-runner] Plan mode complete in ${Date.now() - startedAt}ms — auto-executing`);
 
   const planResult: PlanModeResult = {
     plan: steps,
@@ -469,6 +472,8 @@ export async function executePlan(planResult: PlanModeResult): Promise<ClaudeRes
     corr: opts.corr,
     threadId: opts.threadId,
     maxTurns: 3,
+    ephemeral: true,
+  });
 
   const finalText = summary.text || `${failedSteps > 0 ? '❌' : '✅'} ${doneSteps}/${plan.length} steps done (${Date.now() - startedAt}ms)`;
   console.log(`[task-runner] Plan executed in ${Date.now() - startedAt}ms`);
@@ -584,6 +589,8 @@ Write a SHORT summary for Boss (2-3 sentences max). Start with ✅ if all succee
     corr: opts.corr,
     threadId: opts.threadId,
     maxTurns: 3,
+    ephemeral: true,
+  });
 
   const finalText = summary.text || `${failedSteps > 0 ? '❌' : '✅'} Task ${failedSteps > 0 ? 'partially ' : ''}complete: ${doneSteps}/${steps.length} steps done (${Date.now() - startedAt}ms)`;
 

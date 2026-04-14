@@ -223,10 +223,33 @@ function toolRead(args: Record<string, unknown>): string {
   }
 }
 
+// HARDCODED SAFETY: block writes to ARIA's own source code / identity / config
+// Protects ARIA from modifying itself during debug/task runs
+function isProtectedPath(filePath: string): string | null {
+  const ARIA_PROTECTED_PREFIXES = [
+    '/Users/hungpham/projects/aria-mac/src/',
+    '/Users/hungpham/projects/aria-mac/identity/',
+    '/Users/hungpham/projects/aria-mac/package.json',
+    '/Users/hungpham/projects/aria-mac/package-lock.json',
+    '/Users/hungpham/projects/aria-mac/tsconfig.json',
+    '/Users/hungpham/projects/aria-mac/dashboard/',
+  ];
+  const abs = filePath.replace('~', process.env.HOME ?? '/Users/hungpham');
+  for (const prefix of ARIA_PROTECTED_PREFIXES) {
+    if (abs === prefix.replace(/\/$/, '') || abs.startsWith(prefix)) {
+      return `REFUSED: ARIA cannot modify its own source code at ${abs}. Protected path: ${prefix}. Boss must edit this manually.`;
+    }
+  }
+  return null;
+}
+
 function toolWrite(args: Record<string, unknown>): string {
   const filePath = String(args.file_path ?? '');
   const content = String(args.content ?? '');
   if (!filePath) return 'Error: No file_path provided';
+
+  const protectedErr = isProtectedPath(filePath);
+  if (protectedErr) return protectedErr;
 
   try {
     const dir = dirname(filePath);
@@ -245,6 +268,10 @@ function toolEdit(args: Record<string, unknown>): string {
   const replaceAll = Boolean(args.replace_all);
 
   if (!filePath) return 'Error: No file_path provided';
+
+  const protectedErr = isProtectedPath(filePath);
+  if (protectedErr) return protectedErr;
+
   if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
   if (!oldString) return 'Error: No old_string provided';
 
