@@ -22,6 +22,8 @@ curl http://127.0.0.1:3100/api/sessions
 | `02-complex-40.py` | 40 | GitHub research, HuggingFace, Playwright, debug, coding, reasoning | ~60 min | 87.5% (35/40) |
 | `03-diagnosis-10.py` | 10 | Read-only investigations, multi-file scans | ~5 min | **100%** (10/10) |
 | `04-coding-10.py` | 10 | Architecture, refactor proposals, bug hunting, metrics | ~10 min | **100%** (10/10) |
+| `05-function-calling-10.py` | 10 | BFCL-inspired: tool selection, over-/under-tooling, efficiency | ~2 min | **100%** (10/10) |
+| `06-gaia-lite-10.py` | 10 | GAIA-inspired: verifiable single-answer questions (substring/regex grading) | ~1 min | **100%** (10/10) |
 
 ## Running
 

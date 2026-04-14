@@ -260,7 +260,7 @@ async function main() {
           }
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ reply: stripActionBlocks(response.text), elapsed, taskType }));
+          res.end(JSON.stringify({ reply: stripActionBlocks(response.text), elapsed, taskType, corr }));
         } catch (err) {
           res.writeHead(500);
           res.end(JSON.stringify({ error: String(err) }));
