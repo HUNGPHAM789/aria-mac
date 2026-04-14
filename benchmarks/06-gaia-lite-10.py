@@ -9,11 +9,13 @@ Each test has a verifiable expected answer. ARIA must:
 Grading is substring/regex match on the reply text — not exact equality —
 to allow for natural-language framing around the answer.
 """
-import json, urllib.request, time, sys, re
+import json, os, sys, time, re
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from backends import get_backend
 
-ARIA_URL = "http://127.0.0.1:3100/api/dashboard/send"
-TIMEOUT = 240
+BACKEND_NAME = os.environ.get("BACKEND", "aria")
+TIMEOUT = 300
 
 # Each test: prompt + answer expectation
 # expect_regex: regex pattern that must match somewhere in reply (case-insensitive)
@@ -106,17 +108,10 @@ def grade(reply: str, t: dict) -> tuple[bool, str]:
 
 
 def run_test(i: int, t: dict) -> dict:
-    start = time.time()
-    try:
-        req = urllib.request.Request(
-            ARIA_URL,
-            data=json.dumps({"message": t["prompt"]}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except Exception as e:
-        return {"i": i, "name": t["name"], "pass": False, "error": str(e)}
+    call = get_backend(BACKEND_NAME)
+    data = call(t["prompt"], timeout=TIMEOUT)
+    if data.get("error"):
+        return {"i": i, "name": t["name"], "pass": False, "error": data["error"]}
 
     reply = data.get("reply", "")
     elapsed = data.get("elapsed", "?")
@@ -149,7 +144,7 @@ def main():
 
     print(f"\n╔══════════════════════════════════════════════╗")
     print(f"║  Benchmark B: GAIA-lite (verifiable answers)  ║")
-    print(f"║  Tests {start_from}-{end_at} of {len(TESTS)}                          ║")
+    print(f"║  Tests {start_from}-{end_at} of {len(TESTS)}  · backend={BACKEND_NAME}                ║")
     print(f"╚══════════════════════════════════════════════╝")
 
     results = []
@@ -162,7 +157,7 @@ def main():
     passed = sum(1 for r in results if r.get("pass"))
     print(f"\n{'═' * 60}")
     print(f"  PASSED: {passed}/{len(results)} ({passed / len(results) * 100:.1f}%)")
-    out = f"/tmp/aria-gaia-results-{int(time.time())}.json"
+    out = f"/tmp/aria-gaia-results-{BACKEND_NAME}-{int(time.time())}.json"
     with open(out, "w") as f:
         json.dump(results, f, indent=2)
     print(f"  Report: {out}")
