@@ -78,6 +78,9 @@ export function log(event: LogEvent, corr: string, data: Record<string, unknown>
       ...data,
     };
     appendFileSync(currentLogPath(), JSON.stringify(record) + '\n', 'utf-8');
+    
+    // Proactive rotation: trigger rotation on every log event
+    rotateLogs();
   } catch {
     // Logging must never crash the bot
   }

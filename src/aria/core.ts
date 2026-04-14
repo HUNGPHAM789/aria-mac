@@ -596,6 +596,11 @@ export async function runClaude(
     try { dbInsertMessage(sessionId, 'user', message); } catch { /* ignore */ }
   }
 
+  // Housekeeping: Force GC if available to mitigate slow-growing RSS
+  if (typeof (global as any).gc === 'function') {
+    (global as any).gc();
+  }
+
   // Build tool definitions
   const ollamaTools = convertToolsToOllama();
 

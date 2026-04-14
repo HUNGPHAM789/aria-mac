@@ -131,7 +131,7 @@ async function main() {
   const launchWithRetry = async (attempt = 1): Promise<void> => {
     try {
       await bot.launch();
-      console.log('[ARIA] Bot polling stopped.');
+      console.log('[ARIA] Bot polling active.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const code = (err as NodeJS.ErrnoException)?.code;

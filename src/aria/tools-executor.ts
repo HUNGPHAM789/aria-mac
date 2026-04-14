@@ -153,16 +153,17 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'Browser',
-    description: 'Automate a browser with Playwright. Navigate URLs, take screenshots, extract rendered content (with JS), click, fill. Use for testing web UIs, verifying deployments, capturing screenshots.',
+    description: 'Automate a browser with Playwright. Actions: navigate, screenshot, content (JS-rendered text), click, fill (instant), type (simulates keypresses), press (single key like Enter/Tab), evaluate (run JS), wait_for (wait for element).',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot', 'content', 'click', 'fill', 'navigate'], description: 'Browser action' },
-        url: { type: 'string', description: 'URL to navigate to' },
-        selector: { type: 'string', description: 'CSS selector for click/fill' },
-        value: { type: 'string', description: 'Value for fill' },
+        action: { type: 'string', enum: ['screenshot', 'content', 'click', 'fill', 'type', 'press', 'navigate', 'evaluate', 'wait_for'], description: 'Browser action' },
+        url: { type: 'string', description: 'URL to navigate to (optional if already navigated)' },
+        selector: { type: 'string', description: 'CSS selector for click/fill/type/wait_for' },
+        value: { type: 'string', description: 'Text for fill/type, key for press (e.g. Enter), JS for evaluate' },
         filename: { type: 'string', description: 'Screenshot filename' },
         full_page: { type: 'boolean', description: 'Full-page screenshot (default true)' },
+        delay: { type: 'number', description: 'Keypress delay in ms for type action (default 50)' },
       },
       required: ['action'],
     },
@@ -550,6 +551,41 @@ async function toolBrowser(args: Record<string, unknown>): Promise<string> {
       case 'navigate': {
         const title = await page.title();
         result = `Navigated to: ${url}\nTitle: ${title}`;
+        break;
+      }
+      case 'type': {
+        const selector = String(args.selector ?? '');
+        const value = String(args.value ?? '');
+        const delay = Number(args.delay ?? 50);
+        if (!selector) { result = 'Error: selector required'; break; }
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        await page.type(selector, value, { delay });
+        result = `Typed into ${selector}: "${value.slice(0, 50)}" (${value.length} chars, ${delay}ms/key)`;
+        break;
+      }
+      case 'press': {
+        const selector = String(args.selector ?? '');
+        const key = String(args.value ?? 'Enter');
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        if (selector) await page.press(selector, key);
+        else await page.keyboard.press(key);
+        result = `Pressed key: ${key}${selector ? ` on ${selector}` : ''}`;
+        break;
+      }
+      case 'evaluate': {
+        const js = String(args.value ?? '');
+        if (!js) { result = 'Error: value (JS expression) required'; break; }
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        const evalResult = await page.evaluate(js) as unknown;
+        result = `Evaluated: ${String(evalResult).slice(0, 2000)}`;
+        break;
+      }
+      case 'wait_for': {
+        const selector = String(args.selector ?? '');
+        if (!selector) { result = 'Error: selector required'; break; }
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        await page.waitForSelector(selector, { timeout: 20000 });
+        result = `Element appeared: ${selector}`;
         break;
       }
       default: result = `Unknown action: ${action}`;

@@ -103,8 +103,7 @@ Task: ${task}`;
     model: opts.model,
     corr: opts.corr,
     threadId: opts.threadId,
-    maxTurns: 3, ephemeral: true,
-  });
+    maxTurns: 3,
 
   // Parse numbered list from response
   const lines = planResponse.text.split('\n').filter(l => /^\d+[\.\)]\s/.test(l.trim()));
@@ -175,7 +174,6 @@ Do NOT plan future steps — just do THIS step.`;
     threadId: opts.threadId,
     extraTools: opts.extraTools,
     maxTurns: 15, ephemeral: true,
-  });
 
   // Check if tools were actually used (response should mention tool results)
   const usedTools = response.text.includes('✅') ||
@@ -223,8 +221,8 @@ async function runDebugTask(
     opts.onStream?.({ type: 'text', text: `\n🔍 Debug cycle ${cycle + 1}: Investigating...\n` });
 
     const diagnosePrompt = cycle === 0
-      ? `Boss reported an issue: "${task}"\n\nInvestigate the problem. Use tools to check the current state — read files, check git status, test URLs, check logs. Tell me what's wrong.\n\n${context}`
-      : `The previous fix didn't work. Here's what happened:\n${context}\n\nDig deeper. Check something different. Use tools to investigate.`;
+      ? `You are in debug mode. Your goal is to investigate the following issue: "${task}"\n\nSteps to follow:\n1. Use tools to check the current state (read files, check git status, test URLs, check logs).\n2. Analyze the findings.\n3. Report what is wrong or confirm if everything looks correct.\n\nContext:\n${context}`
+      : `The previous fix for "${task}" didn't work. Here's what happened:\n${context}\n\nDig deeper. Check something different. Use tools to investigate.`;
 
     const diagnosis = await runClaude(diagnosePrompt, opts.systemPrompt, {
       onStream: opts.onStream,
@@ -232,7 +230,7 @@ async function runDebugTask(
       corr: opts.corr,
       threadId: opts.threadId,
       extraTools: opts.extraTools,
-      maxTurns: 10, ephemeral: true,
+      maxTurns: 10,
     });
 
     context += `\nDiagnosis ${cycle + 1}: ${diagnosis.text.slice(0, 500)}\n`;
@@ -241,7 +239,7 @@ async function runDebugTask(
     console.log(`[task-runner] Debug cycle ${cycle + 1}/${maxCycles}: fixing`);
     opts.onStream?.({ type: 'text', text: `\n🔧 Applying fix...\n` });
 
-    const fixPrompt = `Based on this diagnosis:\n${diagnosis.text.slice(0, 1000)}\n\nFix the problem NOW. Use tools (Write, Edit, Bash). Do not explain — just fix it.`;
+    const fixPrompt = `Based on this diagnosis:\n${diagnosis.text.slice(0, 1000)}\n\nFix the problem. First, explain your intended approach (what files you will modify and why), then use tools to execute it. This ensures the fix can be audited.`;
 
     const fix = await runClaude(fixPrompt, opts.systemPrompt, {
       onStream: opts.onStream,
@@ -249,7 +247,7 @@ async function runDebugTask(
       corr: opts.corr,
       threadId: opts.threadId,
       extraTools: opts.extraTools,
-      maxTurns: 15, ephemeral: true,
+      maxTurns: 15,
     });
 
     context += `\nFix ${cycle + 1}: ${fix.text.slice(0, 500)}\n`;
@@ -266,7 +264,7 @@ async function runDebugTask(
       corr: opts.corr,
       threadId: opts.threadId,
       extraTools: opts.extraTools,
-      maxTurns: 8, ephemeral: true,
+      maxTurns: 8,
     });
 
     context += `\nVerification ${cycle + 1}: ${verify.text.slice(0, 500)}\n`;
@@ -344,7 +342,7 @@ Do NOT plan yet — just investigate.`;
     corr: opts.corr,
     threadId: opts.threadId,
     extraTools: opts.extraTools,
-    maxTurns: 12, ephemeral: true,
+    maxTurns: 12,
   });
 
   console.log(`[task-runner] Explore done: ${exploration.text.length} chars`);
@@ -371,8 +369,7 @@ Also note any risks or things to verify after.`;
     model: opts.model,
     corr: opts.corr,
     threadId: opts.threadId,
-    maxTurns: 3, ephemeral: true,
-  });
+    maxTurns: 3,
 
   console.log(`[task-runner] Design done: ${design.text.length} chars`);
 
@@ -471,8 +468,7 @@ export async function executePlan(planResult: PlanModeResult): Promise<ClaudeRes
     model: opts.model,
     corr: opts.corr,
     threadId: opts.threadId,
-    maxTurns: 3, ephemeral: true,
-  });
+    maxTurns: 3,
 
   const finalText = summary.text || `${failedSteps > 0 ? '❌' : '✅'} ${doneSteps}/${plan.length} steps done (${Date.now() - startedAt}ms)`;
   console.log(`[task-runner] Plan executed in ${Date.now() - startedAt}ms`);
@@ -587,8 +583,7 @@ Write a SHORT summary for Boss (2-3 sentences max). Start with ✅ if all succee
     model: opts.model,
     corr: opts.corr,
     threadId: opts.threadId,
-    maxTurns: 3, ephemeral: true,
-  });
+    maxTurns: 3,
 
   const finalText = summary.text || `${failedSteps > 0 ? '❌' : '✅'} Task ${failedSteps > 0 ? 'partially ' : ''}complete: ${doneSteps}/${steps.length} steps done (${Date.now() - startedAt}ms)`;
 
