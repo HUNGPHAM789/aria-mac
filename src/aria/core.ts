@@ -711,9 +711,16 @@ export async function runClaude(
         if (corr) log('tool_result', corr, { thread: threadId, tool: toolName, outLen: result.length });
         onStream?.({ type: 'tool_result', toolName, output: truncated });
 
+        // Cap tool result fed back to model at 2000 chars to prevent context bloat on scan tasks
+        // Full result still streamed to user; the model sees a summarized version
+        const MAX_TOOL_CONTENT = 2000;
+        const modelContent = result.length > MAX_TOOL_CONTENT
+          ? result.slice(0, MAX_TOOL_CONTENT) + `\n…[truncated — ${result.length - MAX_TOOL_CONTENT} more chars. Call Read with offset if you need more.]`
+          : result;
+
         messages.push({
           role: 'tool',
-          content: result,
+          content: modelContent,
         });
       }
     }
