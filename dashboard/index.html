@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JarvisM4 Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, system-ui, sans-serif;
+  background: #0a0a0b; color: #e8e8ed;
+  height: 100vh; overflow: hidden;
+  display: grid; grid-template-columns: 240px 1fr 380px;
+}
+
+aside.sidebar {
+  background: #16161a; border-right: 1px solid #2a2a30;
+  padding: 16px; overflow-y: auto;
+}
+aside.sidebar h2 {
+  font-size: 0.7rem; text-transform: uppercase; color: #6b6f76;
+  letter-spacing: 1.5px; margin-bottom: 12px;
+}
+.session-item {
+  padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  margin-bottom: 4px; font-size: 0.8rem; color: #b0b0bc;
+  transition: all 0.15s;
+}
+.session-item:hover { background: #1c1c22; color: #e8e8ed; }
+.session-item.active { background: rgba(255,107,53,0.15); color: #ff8c5a; border-left: 3px solid #ff6b35; }
+.session-item.live-test { border-left: 3px solid #58cc02; }
+.session-item.live-test.active { background: rgba(88,204,2,0.12); color: #9de86a; border-left-color: #58cc02; }
+.session-meta { font-size: 0.65rem; color: #6b6f76; margin-top: 2px; }
+.badge { background: #58cc02; color: #0a0a0b; font-size: 0.55rem; padding: 1px 5px; border-radius: 3px; font-weight: 700; margin-left: 4px; vertical-align: middle; }
+
+main.chat {
+  display: flex; flex-direction: column; height: 100vh;
+}
+header.chat-header {
+  padding: 14px 24px; border-bottom: 1px solid #2a2a30;
+  background: #12121a; display: flex; align-items: center; justify-content: space-between;
+}
+header.chat-header h1 { font-size: 1rem; font-weight: 600; color: #ff8c5a; }
+.status { font-size: 0.7rem; color: #58cc02; }
+
+.messages {
+  flex: 1; overflow-y: auto; padding: 24px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.msg {
+  max-width: 75%; padding: 12px 16px; border-radius: 14px;
+  font-size: 0.9rem; line-height: 1.5; word-wrap: break-word;
+}
+.msg.user { background: #ff6b35; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.assistant { background: #1c1c22; color: #e8e8ed; align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg-meta { font-size: 0.65rem; color: #6b6f76; margin-top: 4px; }
+
+.input-bar {
+  padding: 16px 24px; border-top: 1px solid #2a2a30; background: #12121a;
+  display: flex; gap: 8px;
+}
+.input-bar input {
+  flex: 1; background: #1c1c22; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 12px 16px; color: #e8e8ed; font-size: 0.9rem; font-family: inherit;
+}
+.input-bar input:focus { outline: none; border-color: #ff6b35; }
+.input-bar button {
+  background: #ff6b35; color: white; border: none; border-radius: 10px;
+  padding: 12px 20px; cursor: pointer; font-weight: 600; font-size: 0.85rem;
+}
+.input-bar button:hover { background: #ff8c5a; }
+.input-bar button:disabled { background: #6b6f76; cursor: not-allowed; }
+
+aside.tools {
+  background: #16161a; border-left: 1px solid #2a2a30;
+  padding: 16px; overflow-y: auto;
+}
+aside.tools h2 {
+  font-size: 0.7rem; text-transform: uppercase; color: #6b6f76;
+  letter-spacing: 1.5px; margin-bottom: 12px;
+}
+.tool-event {
+  padding: 8px 10px; border-radius: 6px; margin-bottom: 4px;
+  font-size: 0.72rem; font-family: 'SF Mono', Menlo, monospace;
+  background: #1c1c22; border-left: 3px solid #ff6b35;
+}
+.tool-event .ts { color: #6b6f76; font-size: 0.65rem; }
+.tool-event .event-type { color: #ff8c5a; font-weight: 600; }
+.tool-event .event-data { color: #b0b0bc; margin-top: 2px; word-break: break-all; }
+.tool-event.tool_use { border-left-color: #58cc02; }
+.tool-event.tool_use .event-type { color: #58cc02; }
+.tool-event.error { border-left-color: #ef4444; }
+.tool-event.error .event-type { color: #ef4444; }
+.tool-event.request_in { border-left-color: #1cb0f6; }
+.tool-event.request_in .event-type { color: #1cb0f6; }
+
+.tab-btn {
+  background: #1c1c22; color: #6b6f76; border: 1px solid #2a2a30;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.7rem; font-family: inherit;
+}
+.tab-btn.active { background: rgba(255,107,53,0.15); color: #ff8c5a; border-color: #ff6b35; }
+
+.quality-summary {
+  background: #1c1c22; border-radius: 8px; padding: 14px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+}
+.quality-stat { font-size: 0.7rem; color: #6b6f76; }
+.quality-stat strong { font-size: 1.4rem; color: #e8e8ed; display: block; margin-top: 2px; }
+.quality-stat.good strong { color: #58cc02; }
+.quality-stat.warn strong { color: #fcd34d; }
+.quality-stat.bad strong { color: #ef4444; }
+
+.issue-row {
+  padding: 6px 10px; background: #1c1c22; border-radius: 6px; margin-bottom: 4px;
+  display: flex; justify-content: space-between; font-size: 0.72rem;
+}
+.issue-row .count { color: #ff8c5a; font-weight: 700; }
+
+.bad-msg {
+  background: #1c1c22; border-left: 3px solid #ef4444; border-radius: 6px;
+  padding: 8px 10px; margin-bottom: 6px; font-size: 0.7rem;
+}
+.bad-msg .score { color: #ef4444; font-weight: 700; font-size: 0.8rem; }
+.bad-msg .user { color: #b0b0bc; margin: 4px 0 2px; }
+.bad-msg .assistant { color: #6b6f76; font-style: italic; }
+.bad-msg .issues { color: #fcd34d; font-size: 0.65rem; margin-top: 4px; }
+
+.thinking-indicator {
+  padding: 12px 16px; background: rgba(255,107,53,0.08);
+  border-radius: 12px; align-self: flex-start;
+  font-size: 0.85rem; color: #ff8c5a;
+}
+.thinking-indicator::after {
+  content: '...'; animation: dots 1.5s infinite;
+}
+@keyframes dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <h2>Sessions</h2>
+  <div id="sessions"></div>
+</aside>
+
+<main class="chat">
+  <header class="chat-header">
+    <h1>⚡ JarvisM4 Dashboard</h1>
+    <span class="status" id="status">●  Live</span>
+  </header>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="input-bar">
+    <input type="text" id="input" placeholder="Test as user — type a message..." autofocus>
+    <button id="send">Send</button>
+  </div>
+</main>
+
+<aside class="tools">
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="tab-btn active" data-tab="quality" onclick="switchTab('quality')">📊 Quality</button>
+    <button class="tab-btn" data-tab="tools" onclick="switchTab('tools')">🔧 Tool Log</button>
+  </div>
+  <div id="quality-tab">
+    <div class="quality-summary" id="quality-summary"></div>
+    <h2 style="margin-top:16px">Top Issues (24h)</h2>
+    <div id="top-issues"></div>
+    <h2 style="margin-top:16px">Recent Bad Responses</h2>
+    <div id="recent-bad"></div>
+  </div>
+  <div id="tools-tab" style="display:none">
+    <h2>Tool Log (live)</h2>
+    <div id="tools"></div>
+  </div>
+</aside>
+
+<script>
+let currentSession = null;
+let polling = null;
+
+function sessionLabel(id) {
+  if (id.includes('claude:live-test')) return { label: '🤖 Claude ↔ ARIA', badge: 'LIVE TEST' };
+  if (id.includes('telegram:')) return { label: '📱 Telegram · ' + id.split(':').pop().slice(0, 12), badge: null };
+  if (id.includes('agent:')) return { label: '🛠 Agent · ' + id.split(':').pop().slice(0, 12), badge: null };
+  if (id.includes('mc:')) return { label: '💬 MC · ' + id.split(':').pop().slice(0, 12), badge: null };
+  return { label: id.replace('session:', '').slice(0, 30), badge: null };
+}
+
+async function loadSessions() {
+  try {
+    const res = await fetch('/api/sessions');
+    const sessions = await res.json();
+    const container = document.getElementById('sessions');
+    container.innerHTML = sessions.map(s => {
+      const { label, badge } = sessionLabel(s.session_id);
+      const isLiveTest = s.session_id.includes('claude:live-test');
+      return `
+      <div class="session-item ${s.session_id === currentSession ? 'active' : ''} ${isLiveTest ? 'live-test' : ''}" data-id="${s.session_id}">
+        <div>${label}${badge ? ` <span class="badge">${badge}</span>` : ''}</div>
+        <div class="session-meta">${s.msg_count} msgs · ${new Date(s.last_msg * 1000).toLocaleTimeString()}</div>
+      </div>
+    `;
+    }).join('');
+    container.querySelectorAll('.session-item').forEach(el => {
+      el.onclick = () => {
+        currentSession = el.dataset.id;
+        loadSessions();
+        loadMessages();
+      };
+    });
+    if (!currentSession && sessions.length > 0) {
+      // Auto-select the live-test session if it exists, otherwise most recent
+      const liveTest = sessions.find(s => s.session_id.includes('claude:live-test'));
+      currentSession = liveTest ? liveTest.session_id : sessions[0].session_id;
+      loadSessions();
+      loadMessages();
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function loadMessages() {
+  if (!currentSession) return;
+  try {
+    const res = await fetch(`/api/messages?session=${encodeURIComponent(currentSession)}`);
+    const msgs = await res.json();
+    const container = document.getElementById('messages');
+    const isLiveTest = currentSession.includes('claude:live-test');
+    const userLabel = isLiveTest ? 'Claude (testing)' : 'user';
+    const assistantLabel = isLiveTest ? 'ARIA' : 'assistant';
+    container.innerHTML = msgs.map(m => `
+      <div class="msg ${m.role}">
+        ${escapeHtml(m.content).replace(/\n/g, '<br>')}
+        <div class="msg-meta">${m.role === 'user' ? userLabel : assistantLabel} · ${new Date(m.created_at * 1000).toLocaleTimeString()}</div>
+      </div>
+    `).join('');
+    container.scrollTop = container.scrollHeight;
+
+    // Update header
+    const headerEl = document.querySelector('header.chat-header h1');
+    if (headerEl) {
+      if (isLiveTest) headerEl.innerHTML = '🤖 Claude ↔ ARIA · <span style="color:#58cc02;font-size:0.8em">LIVE</span>';
+      else headerEl.innerHTML = '⚡ JarvisM4 Dashboard';
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function loadTools() {
+  try {
+    const res = await fetch('/api/tool-log');
+    const events = await res.json();
+    const container = document.getElementById('tools');
+    container.innerHTML = events.slice(-50).reverse().map(e => {
+      const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+      const event = e.event || 'event';
+      const data = e.data || {};
+      let detail = '';
+      if (data.tool) detail = `${data.tool}`;
+      else if (data.msgLen !== undefined) detail = `msg: ${data.msgLen} chars`;
+      else if (data.textLen !== undefined) detail = `out: ${data.textLen} chars · ${data.ms}ms`;
+      else detail = JSON.stringify(data).slice(0, 80);
+      return `
+        <div class="tool-event ${event}">
+          <span class="ts">${ts}</span> <span class="event-type">${event}</span>
+          ${detail ? `<div class="event-data">${escapeHtml(detail)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  } catch (e) { console.error(e); }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+document.getElementById('send').onclick = sendMessage;
+document.getElementById('input').onkeydown = (e) => { if (e.key === 'Enter') sendMessage(); };
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const btn = document.getElementById('send');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  // Show user message immediately
+  const container = document.getElementById('messages');
+  container.innerHTML += `<div class="msg user">${escapeHtml(msg).replace(/\n/g, '<br>')}<div class="msg-meta">user · just now</div></div>`;
+  container.innerHTML += `<div class="thinking-indicator" id="thinking">JarvisM4 is thinking</div>`;
+  container.scrollTop = container.scrollHeight;
+
+  try {
+    const res = await fetch('/api/dashboard/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await res.json();
+    document.getElementById('thinking')?.remove();
+
+    if (data.reply) {
+      container.innerHTML += `<div class="msg assistant">${escapeHtml(data.reply).replace(/\n/g, '<br>')}<div class="msg-meta">assistant · ${data.elapsed}s · ${data.taskType}</div></div>`;
+      container.scrollTop = container.scrollHeight;
+    } else {
+      container.innerHTML += `<div class="msg assistant" style="background:#3a1a1a;color:#ef4444">Error: ${escapeHtml(data.error || 'Unknown error')}</div>`;
+    }
+
+    // Reload sessions to pick up the new dashboard session
+    loadSessions();
+  } catch (e) {
+    document.getElementById('thinking')?.remove();
+    container.innerHTML += `<div class="msg assistant" style="background:#3a1a1a;color:#ef4444">Network error: ${e.message}</div>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Send';
+  input.focus();
+}
+
+async function loadQuality() {
+  try {
+    const res = await fetch('/api/quality?hours=24');
+    const r = await res.json();
+    document.getElementById('quality-summary').innerHTML = `
+      <div class="quality-stat"><strong>${r.avgScore}</strong>Avg score</div>
+      <div class="quality-stat"><strong>${r.total}</strong>Total turns</div>
+      <div class="quality-stat good"><strong>${r.good}</strong>✓ Good</div>
+      <div class="quality-stat warn"><strong>${r.warn}</strong>⚠ Warn</div>
+      <div class="quality-stat bad"><strong>${r.bad}</strong>✗ Bad</div>
+      <div class="quality-stat"><strong>${r.total > 0 ? Math.round(r.good / r.total * 100) : 0}%</strong>Pass rate</div>
+    `;
+    document.getElementById('top-issues').innerHTML = r.topIssues.length === 0
+      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No issues yet</div>'
+      : r.topIssues.map(i => `<div class="issue-row"><span>${i.code}</span><span class="count">${i.count}</span></div>`).join('');
+    document.getElementById('recent-bad').innerHTML = r.recentBad.length === 0
+      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No bad responses 🎉</div>'
+      : r.recentBad.slice(0, 8).map(b => `
+        <div class="bad-msg">
+          <span class="score">${b.score}/100</span> <span style="color:#6b6f76">${new Date(b.createdAt * 1000).toLocaleTimeString()}</span>
+          <div class="user">User: ${escapeHtml(b.userMsg.slice(0, 100))}</div>
+          <div class="assistant">→ ${escapeHtml(b.assistantMsg.slice(0, 120))}</div>
+          <div class="issues">${b.issues.join(', ')}</div>
+        </div>
+      `).join('');
+  } catch (e) { console.error(e); }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.getElementById('quality-tab').style.display = tab === 'quality' ? 'block' : 'none';
+  document.getElementById('tools-tab').style.display = tab === 'tools' ? 'block' : 'none';
+}
+
+// Initial load
+loadSessions();
+loadTools();
+loadQuality();
+
+// Adaptive polling: faster when viewing live-test session
+setInterval(loadTools, 3000);
+setInterval(() => {
+  if (!currentSession) return;
+  loadMessages();
+}, 2000); // Poll messages every 2s for live visibility
+setInterval(loadSessions, 5000);
+setInterval(loadQuality, 15000);
+</script>
+</body>
+</html>

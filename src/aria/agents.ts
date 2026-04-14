@@ -1,6 +1,7 @@
 // src/aria/agents.ts — Background agent spawning via Ollama (replaces Claude Agent SDK)
 import { randomUUID } from 'crypto';
 import { runClaude, type RunClaudeOptions } from './core.js';
+import { runTask } from './task-runner.js';
 import {
   getDb,
   insertAgentTask,
@@ -236,9 +237,10 @@ async function runAgentAsync(
       touchAgentHeartbeat(taskId);
     }, 30_000);
 
-    const result = await runClaude(prompt, agentSystemPrompt, {
-      maxTurns: agentDef.maxTurns,
+    const result = await runTask(prompt, {
+      systemPrompt: agentSystemPrompt,
       corr,
+      threadId: `agent:${taskId}`,
     });
 
     clearInterval(progressInterval);

@@ -5,6 +5,7 @@ import './env.js';
 import http from 'http';
 import { bot } from '../telegram/bot.js';
 import { getDb, getRunningTasks, failAgentTask } from '../db/index.js';
+import { startQualityJudge, getQualityReport } from '../aria/quality-judge.js';
 import { startNotificationPoller, startHeartbeatPoller, setAgentProgressHandler } from '../aria/agents.js';
 import { seedDefaultProjects, indexAllCodebases, startFileWatchers, stopFileWatchers } from '../aria/codebase.js';
 import { startScheduler } from '../aria/scheduler.js';
@@ -122,6 +123,9 @@ async function main() {
     console.warn('[ARIA] ARIA_ALLOWED_TELEGRAM_ID not set — pollers disabled');
   }
 
+  // Quality judge — scores conversation turns every 60s
+  startQualityJudge(60000);
+
   // Launch Telegram long-polling with retry on network errors
   console.log('[ARIA] Launching Telegram bot (long-polling)...');
   const launchWithRetry = async (attempt = 1): Promise<void> => {
@@ -155,6 +159,115 @@ async function main() {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+    // ─── Dashboard: serve UI ──
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/dashboard')) {
+      const { readFileSync: rfs } = await import('fs');
+      const { join: jn } = await import('path');
+      try {
+        const html = rfs(jn(process.cwd(), 'dashboard', 'index.html'), 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(html);
+      } catch { res.writeHead(404); res.end('Dashboard not found'); }
+      return;
+    }
+
+    // ─── Dashboard: list sessions ──
+    if (req.method === 'GET' && req.url === '/api/sessions') {
+      try {
+        const db = getDb();
+        const rows = db.prepare(`
+          SELECT session_id, COUNT(*) as msg_count, MAX(created_at) as last_msg
+          FROM messages GROUP BY session_id ORDER BY last_msg DESC LIMIT 20
+        `).all();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(rows));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
+    // ─── Dashboard: get messages for a session ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/messages')) {
+      try {
+        const url = new URL(req.url, 'http://localhost');
+        const sid = url.searchParams.get('session');
+        if (!sid) { res.writeHead(400); res.end('session param required'); return; }
+        const db = getDb();
+        const rows = db.prepare(`
+          SELECT id, role, content, created_at FROM messages
+          WHERE session_id = ? ORDER BY id ASC LIMIT 200
+        `).all(sid);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(rows));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
+    // ─── Dashboard: quality report ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/quality')) {
+      try {
+        const url = new URL(req.url, 'http://localhost');
+        const hours = parseInt(url.searchParams.get('hours') ?? '24', 10);
+        const report = getQualityReport(hours);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(report));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
+    // ─── Dashboard: get tool log ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/tool-log')) {
+      try {
+        const { readFileSync: rfs, existsSync: exs } = await import('fs');
+        const { join: jn } = await import('path');
+        const date = new Date().toISOString().slice(0, 10);
+        const logPath = jn(process.cwd(), 'data', 'logs', `${date}.jsonl`);
+        if (!exs(logPath)) { res.writeHead(200); res.end('[]'); return; }
+        const lines = rfs(logPath, 'utf-8').trim().split('\n');
+        const events = lines.slice(-200).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(events));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
+    // ─── Dashboard: send message as user (Claude ↔ ARIA live test) ──
+    if (req.method === 'POST' && req.url === '/api/dashboard/send') {
+      let body = '';
+      req.on('data', (c: Buffer) => body += c.toString());
+      req.on('end', async () => {
+        try {
+          const { message } = JSON.parse(body);
+          if (!message) { res.writeHead(400); res.end(JSON.stringify({ error: 'No message' })); return; }
+          const corr = newCorrelationId();
+          const threadId = 'claude:live-test';
+          const identityMd = loadIdentity();
+          const traits = loadTraitsFromDb();
+          const henryMemory = await loadHenryMemoryAsync(message, corr);
+          const availableSkills = loadAvailableSkills();
+          const { detectSkillContext } = await import('../aria/memory.js');
+          const skillContext = detectSkillContext(message);
+          const systemPrompt = buildSystemPrompt(identityMd, traits, henryMemory + skillContext, availableSkills);
+          const extraTools = buildAriaTools({ corr, threadId });
+          const { runTask, classifyTask } = await import('../aria/task-runner.js');
+          const taskType = classifyTask(message);
+          const startTime = Date.now();
+          let response;
+          if (taskType !== 'chat') {
+            response = await runTask(message, { systemPrompt, model: getModel(), extraTools, corr, threadId });
+          } else {
+            response = await runClaude(message, systemPrompt, { model: getModel(), extraTools, corr, threadId });
+          }
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ reply: stripActionBlocks(response.text), elapsed, taskType }));
+        } catch (err) {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: String(err) }));
+        }
+      });
+      return;
+    }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
       const secret = process.env.ARIA_API_SECRET;

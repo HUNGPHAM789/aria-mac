@@ -7,3 +7,10 @@ data/
 logs/
 dist/
 .next/
+
+# Runtime artifacts
+tsconfig.tsbuildinfo
+shipping_manifest.json
+data/canvas/
+data/screenshots/
+data/thinking/

@@ -136,6 +136,37 @@ export const TOOLS: ToolDefinition[] = [
       required: ['todos'],
     },
   },
+  {
+    name: 'Canvas',
+    description: 'Generate an image using ComfyUI (SDXL). Returns the path to the generated image. Use for blog hero images, diagrams, concept art, illustrations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'Text description of the image to generate' },
+        negative_prompt: { type: 'string', description: 'What to avoid in the image' },
+        width: { type: 'number', description: 'Image width (default 1024, max 1536)' },
+        height: { type: 'number', description: 'Image height (default 1024, max 1536)' },
+        filename: { type: 'string', description: 'Output filename without extension' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'Browser',
+    description: 'Automate a browser with Playwright. Navigate URLs, take screenshots, extract rendered content (with JS), click, fill. Use for testing web UIs, verifying deployments, capturing screenshots.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['screenshot', 'content', 'click', 'fill', 'navigate'], description: 'Browser action' },
+        url: { type: 'string', description: 'URL to navigate to' },
+        selector: { type: 'string', description: 'CSS selector for click/fill' },
+        value: { type: 'string', description: 'Value for fill' },
+        filename: { type: 'string', description: 'Screenshot filename' },
+        full_page: { type: 'boolean', description: 'Full-page screenshot (default true)' },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 // ─── Tool Implementations ────────────────────────────────────────────────────
@@ -397,6 +428,139 @@ function toolTodoWrite(args: Record<string, unknown>): string {
   }
 }
 
+// ─── Canvas (ComfyUI) ───────────────────────────────────────────────────────
+
+const COMFY_BASE = 'http://127.0.0.1:8188';
+const COMFY_OUTPUT_DIR = join(homedir(), 'projects', 'aria-mac', 'data', 'canvas');
+
+async function toolCanvas(args: Record<string, unknown>): Promise<string> {
+  const prompt = String(args.prompt ?? '');
+  if (!prompt) return 'Error: No prompt provided';
+  const negative = String(args.negative_prompt ?? 'low quality, blurry, distorted, deformed, ugly, bad anatomy');
+  const width = Math.min(Number(args.width ?? 1024), 1536);
+  const height = Math.min(Number(args.height ?? 1024), 1536);
+  const filename = String(args.filename ?? `canvas-${Date.now()}`);
+
+  const workflow: Record<string, unknown> = {
+    '3': { class_type: 'KSampler', inputs: { cfg: 7, denoise: 1, latent_image: ['5', 0], model: ['4', 0], negative: ['7', 0], positive: ['6', 0], sampler_name: 'euler', scheduler: 'normal', seed: Math.floor(Math.random() * 2147483647), steps: 30 } },
+    '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'animagine-xl-4.0-opt.safetensors' } },
+    '5': { class_type: 'EmptyLatentImage', inputs: { batch_size: 1, height, width } },
+    '6': { class_type: 'CLIPTextEncode', inputs: { clip: ['4', 1], text: prompt } },
+    '7': { class_type: 'CLIPTextEncode', inputs: { clip: ['4', 1], text: negative } },
+    '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    '9': { class_type: 'SaveImage', inputs: { filename_prefix: filename, images: ['8', 0] } },
+  };
+
+  try {
+    const queueRes = await fetch(`${COMFY_BASE}/prompt`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow }), signal: AbortSignal.timeout(10000),
+    });
+    if (!queueRes.ok) return `ComfyUI error: ${(await queueRes.text()).slice(0, 300)}`;
+    const { prompt_id } = (await queueRes.json()) as { prompt_id: string };
+
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      const historyRes = await fetch(`${COMFY_BASE}/history/${prompt_id}`, { signal: AbortSignal.timeout(5000) });
+      if (!historyRes.ok) continue;
+      const history = (await historyRes.json()) as Record<string, { outputs?: Record<string, { images?: Array<{ filename: string; subfolder: string }> }> }>;
+      const entry = history[prompt_id];
+      if (!entry?.outputs) continue;
+      for (const nodeOutput of Object.values(entry.outputs)) {
+        if (nodeOutput.images && nodeOutput.images.length > 0) {
+          const img = nodeOutput.images[0];
+          const imgUrl = `${COMFY_BASE}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || '')}&type=output`;
+          if (!existsSync(COMFY_OUTPUT_DIR)) mkdirSync(COMFY_OUTPUT_DIR, { recursive: true });
+          const localPath = join(COMFY_OUTPUT_DIR, `${filename}.png`);
+          const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(15000) });
+          const buffer = Buffer.from(await imgRes.arrayBuffer());
+          writeFileSync(localPath, buffer);
+          return `Image generated: ${localPath} (${buffer.length} bytes, ${width}x${height})\nPrompt: ${prompt.slice(0, 100)}`;
+        }
+      }
+    }
+    return 'Error: ComfyUI generation timed out after 3 minutes';
+  } catch (err) {
+    return `Canvas error: ${(err as Error).message}`;
+  }
+}
+
+// ─── Browser (Playwright) ───────────────────────────────────────────────────
+
+let _browser: Awaited<ReturnType<typeof import('playwright').chromium.launch>> | null = null;
+const BROWSER_SCREENSHOT_DIR = join(homedir(), 'projects', 'aria-mac', 'data', 'screenshots');
+
+async function getBrowser() {
+  if (_browser?.isConnected()) return _browser;
+  const { chromium } = await import('playwright');
+  _browser = await chromium.launch({ headless: true });
+  return _browser;
+}
+
+async function toolBrowser(args: Record<string, unknown>): Promise<string> {
+  const action = String(args.action ?? '');
+  if (!action) return 'Error: No action specified';
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
+    const url = String(args.url ?? '');
+    if (action === 'navigate' || action === 'screenshot' || action === 'content') {
+      if (!url) return 'Error: URL required';
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    }
+    let result = '';
+    switch (action) {
+      case 'screenshot': {
+        if (!existsSync(BROWSER_SCREENSHOT_DIR)) mkdirSync(BROWSER_SCREENSHOT_DIR, { recursive: true });
+        const fname = String(args.filename ?? `screenshot-${Date.now()}.png`);
+        const fpath = join(BROWSER_SCREENSHOT_DIR, fname);
+        const fullPage = args.full_page !== false;
+        await page.screenshot({ path: fpath, fullPage });
+        const title = await page.title();
+        result = `Screenshot saved: ${fpath}\nPage title: ${title}\nURL: ${url}`;
+        break;
+      }
+      case 'content': {
+        const title = await page.title();
+        const text = await page.evaluate(`
+          (() => { const el = document.querySelector('main') || document.querySelector('article') || document.body; return el.innerText.slice(0, 6000); })()
+        `) as string;
+        result = `Title: ${title}\nURL: ${url}\n\n${text}`;
+        break;
+      }
+      case 'click': {
+        const selector = String(args.selector ?? '');
+        if (!selector) { result = 'Error: selector required'; break; }
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        await page.click(selector);
+        result = `Clicked: ${selector}`;
+        break;
+      }
+      case 'fill': {
+        const selector = String(args.selector ?? '');
+        const value = String(args.value ?? '');
+        if (!selector) { result = 'Error: selector required'; break; }
+        if (url) await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        await page.fill(selector, value);
+        result = `Filled ${selector} with: ${value.slice(0, 50)}`;
+        break;
+      }
+      case 'navigate': {
+        const title = await page.title();
+        result = `Navigated to: ${url}\nTitle: ${title}`;
+        break;
+      }
+      default: result = `Unknown action: ${action}`;
+    }
+    await page.close();
+    return result;
+  } catch (err) {
+    return `Browser error: ${(err as Error).message}`;
+  }
+}
+
 // ─── Tool Executor ───────────────────────────────────────────────────────────
 
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -411,6 +575,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       case 'WebFetch': return await toolWebFetch(args);
       case 'WebSearch': return await toolWebSearch(args);
       case 'TodoWrite': return toolTodoWrite(args);
+      case 'Canvas': return await toolCanvas(args);
+      case 'Browser': return await toolBrowser(args);
       default: return `Unknown tool: ${name}. Available tools: ${TOOLS.map(t => t.name).join(', ')}`;
     }
   } catch (err) {

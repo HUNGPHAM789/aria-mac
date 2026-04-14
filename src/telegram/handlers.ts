@@ -1,7 +1,8 @@
 import { bot } from './bot.js';
 import { runClaude, buildSystemPrompt, stripActionBlocks, type StreamEvent } from '../aria/core.js';
+import { runTask, classifyTask } from '../aria/task-runner.js';
 import { loadIdentity, loadTraitsFromDb } from '../aria/identity.js';
-import { loadHenryMemoryAsync, loadAvailableSkills } from '../aria/memory.js';
+import { loadHenryMemoryAsync, loadAvailableSkills, detectSkillContext } from '../aria/memory.js';
 import { cancelAgent, getActiveAgentIds, getActiveAgentInfo, AGENT_TYPES, setAgentProgressHandler, type AgentProgressEvent } from '../aria/agents.js';
 import { agenticSearch } from '../aria/search.js';
 import { searchSummaries, loadRecentSessionContext, maybeGenerateSummary } from '../aria/summarizer.js';
@@ -426,7 +427,8 @@ async function handleAriaMessage(ctx: Context, userMessage: string): Promise<voi
     const traits = loadTraitsFromDb();
     const henryMemory = await loadHenryMemoryAsync(userMessage, corr);
     const recentContext = loadRecentSessionContext(threadId);
-    const systemPrompt = buildSystemPrompt(identityMd, traits, henryMemory, availableSkills, recentContext || undefined);
+    const skillContext = detectSkillContext(userMessage);
+    const systemPrompt = buildSystemPrompt(identityMd, traits, henryMemory + skillContext, availableSkills, recentContext || undefined);
     const sessionId = getThreadSessionId(threadId) ?? undefined;
     const extraTools = buildAriaTools({
       corr,
@@ -596,14 +598,27 @@ async function handleAriaMessage(ctx: Context, userMessage: string): Promise<voi
     try {
       const currentModel = getModel();
       const bossId = ctx.from?.id;
-      response = await runClaude(userMessage, systemPrompt, {
-        sessionId,
-        onStream,
-        model: currentModel,
-        extraTools,
-        corr,
-        threadId,
-      });
+      const taskType = classifyTask(userMessage);
+      if (taskType !== 'chat') {
+        console.log(`[ARIA] Task detected (${taskType}) — using task runner`);
+        response = await runTask(userMessage, {
+          systemPrompt,
+          onStream,
+          model: currentModel,
+          extraTools,
+          corr,
+          threadId,
+        });
+      } else {
+        response = await runClaude(userMessage, systemPrompt, {
+          sessionId,
+          onStream,
+          model: currentModel,
+          extraTools,
+          corr,
+          threadId,
+        });
+      }
     } finally {
       clearInterval(typingInterval);
       typingInterval = undefined;

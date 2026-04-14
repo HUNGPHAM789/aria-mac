@@ -2,6 +2,9 @@
 import { log, logError } from './logger.js';
 import { verifyToolResult } from './verify.js';
 import { executeTool, TOOLS } from './tools-executor.js';
+import { getRecentMessages, insertMessage as dbInsertMessage } from '../db/index.js';
+import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
 
 // ─── Tool Permission Rules ────────────────────────────────────────────────────
 
@@ -63,6 +66,7 @@ interface OllamaChatResponse {
   message: {
     role: string;
     content: string;
+    thinking?: string;
     tool_calls?: OllamaToolCall[];
   };
   done: boolean;
@@ -73,7 +77,7 @@ interface OllamaChatResponse {
 // ─── Ollama API ──────────────────────────────────────────────────────────────
 
 const OLLAMA_BASE_URL = () => process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
-const OLLAMA_MODEL = () => process.env.OLLAMA_MODEL ?? 'gemma4:27b';
+const OLLAMA_MODEL = () => process.env.OLLAMA_MODEL ?? 'gemma4:26b';
 
 function convertToolsToOllama(): OllamaToolDef[] {
   return TOOLS.map(t => ({
@@ -95,23 +99,40 @@ async function ollamaChat(
     model: model ?? OLLAMA_MODEL(),
     messages,
     stream: false,
+    options: {
+      num_predict: 4096, // Generous budget — gemma4 thinking mode needs room
+    },
   };
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
 
-  const res = await fetch(`${OLLAMA_BASE_URL()}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 min per turn
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 500)}`);
+  try {
+    const res = await fetch(`${OLLAMA_BASE_URL()}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 500)}`);
+    }
+
+    const data = (await res.json()) as OllamaChatResponse;
+    // Gemma4 thinking mode: if content is empty but thinking has text, use thinking
+    if (!data.message.content && data.message.thinking) {
+      console.log('[ollama] Model produced thinking but no content — appending thinking as content');
+      data.message.content = data.message.thinking;
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return (await res.json()) as OllamaChatResponse;
 }
 
 // ─── Streaming Ollama Chat ───────────────────────────────────────────────────
@@ -126,67 +147,87 @@ async function ollamaChatStream(
     model: model ?? OLLAMA_MODEL(),
     messages,
     stream: true,
+    options: { num_predict: 4096 },
   };
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
 
-  const res = await fetch(`${OLLAMA_BASE_URL()}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 500)}`);
-  }
+  try {
+    const res = await fetch(`${OLLAMA_BASE_URL()}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
 
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No response body from Ollama');
-
-  let fullContent = '';
-  let toolCalls: OllamaToolCall[] | undefined;
-  let evalCount = 0;
-  let promptEvalCount = 0;
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const chunk = JSON.parse(line) as OllamaChatResponse;
-        if (chunk.message?.content) {
-          fullContent += chunk.message.content;
-          onChunk(chunk.message.content);
-        }
-        if (chunk.message?.tool_calls) {
-          toolCalls = chunk.message.tool_calls;
-        }
-        if (chunk.eval_count) evalCount = chunk.eval_count;
-        if (chunk.prompt_eval_count) promptEvalCount = chunk.prompt_eval_count;
-      } catch { /* skip malformed lines */ }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 500)}`);
     }
-  }
 
-  return {
-    message: {
-      role: 'assistant',
-      content: fullContent,
-      tool_calls: toolCalls,
-    },
-    done: true,
-    eval_count: evalCount,
-    prompt_eval_count: promptEvalCount,
-  };
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('No response body from Ollama');
+
+    let fullContent = '';
+    let fullThinking = '';
+    let toolCalls: OllamaToolCall[] | undefined;
+    let evalCount = 0;
+    let promptEvalCount = 0;
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const chunk = JSON.parse(line) as OllamaChatResponse;
+          if (chunk.message?.content) {
+            fullContent += chunk.message.content;
+            onChunk(chunk.message.content);
+          }
+          if ((chunk.message as { thinking?: string })?.thinking) {
+            fullThinking += (chunk.message as { thinking?: string }).thinking;
+          }
+          if (chunk.message?.tool_calls) {
+            toolCalls = chunk.message.tool_calls;
+          }
+          if (chunk.eval_count) evalCount = chunk.eval_count;
+          if (chunk.prompt_eval_count) promptEvalCount = chunk.prompt_eval_count;
+        } catch { /* skip malformed lines */ }
+      }
+    }
+
+    // Thinking mode fallback
+    if (!fullContent && fullThinking) {
+      console.log('[ollama-stream] Model produced thinking but no content — using thinking as content');
+      fullContent = fullThinking;
+      onChunk(fullThinking);
+    }
+
+    return {
+      message: {
+        role: 'assistant',
+        content: fullContent,
+        tool_calls: toolCalls,
+      },
+      done: true,
+      eval_count: evalCount,
+      prompt_eval_count: promptEvalCount,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ─── ARIA Tool Instructions ──────────────────────────────────────────────────
@@ -259,14 +300,14 @@ export function buildSystemPrompt(
 
   return `
 ════════════════════════════════════════════════════════
-  YOU ARE ARIA — READ THIS FIRST.
+  YOU ARE JARVISM4 — READ THIS FIRST.
 ════════════════════════════════════════════════════════
 
-Your name is ARIA (Adaptive Reasoning & Intelligence Assistant).
-You are NOT a generic AI assistant. You are ARIA.
-When asked "who are you?" or "what's your name?", always answer: "I'm ARIA."
-You live on Henry's Mac M4. You are his personal AI — proactive, sharp, always-on.
-You communicate with Henry via Telegram. Henry is your Boss.
+Your name is JarvisM4 (Adaptive Reasoning & Intelligence Assistant).
+You are NOT a generic AI assistant. You are JarvisM4.
+When asked "who are you?" or "what's your name?", always answer: "I'm JarvisM4."
+You live on Henry's Mac Studio M4 Max. You are his personal AI — proactive, sharp, always-on.
+You communicate with Henry via Telegram (@jarvism4henry_bot). Henry is your Boss.
 You are powered by Gemma 4 26B running locally via Ollama.
 
 ════════════════════════════════════════════════════════
@@ -480,6 +521,8 @@ export interface RunClaudeOptions {
   /** Extra tools to register (e.g. ARIA action tools) */
   extraTools?: Array<{ name: string; description: string; parameters: Record<string, unknown>; execute: (args: Record<string, unknown>) => Promise<string> }>;
   maxTurns?: number;
+  /** Skip DB persistence (for internal task runner calls that shouldn't pollute history) */
+  ephemeral?: boolean;
 }
 
 export async function runClaude(
@@ -494,16 +537,64 @@ export async function runClaude(
       ? { sessionId: optsOrSessionId, onStream: legacyOnStream, model: legacyModel }
       : optsOrSessionId;
 
-  const { onStream, model, corr, threadId, extraTools, maxTurns = 40 } = opts;
+  const { onStream, model, corr, threadId, extraTools, maxTurns = 40, ephemeral = false } = opts;
   const startedAt = Date.now();
+  const sessionId = opts.sessionId ?? (threadId ? `session:${threadId}` : `session:${Date.now()}`);
 
   if (corr) log('request_in', corr, { thread: threadId, model, msgLen: message.length });
 
-  // Build message history
+  // Build message history with inline compaction
   const messages: OllamaMessage[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: message },
   ];
+
+  // Load history (skip if ephemeral — task runner internal calls shouldn't accumulate)
+  if (!ephemeral) {
+    try {
+      const history = getRecentMessages(sessionId, 20);
+      const ordered = [...history].reverse();
+      const KEEP_RECENT = 6;
+      const MAX_CHARS_PER_MSG = 800;
+
+      if (ordered.length > KEEP_RECENT + 4) {
+        const older = ordered.slice(0, ordered.length - KEEP_RECENT);
+        const recent = ordered.slice(-KEEP_RECENT);
+        const summary = older
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => `${m.role}: ${m.content.slice(0, 200).replace(/\n+/g, ' ')}`)
+          .join('\n');
+        if (summary.length > 50) {
+          messages.push({
+            role: 'system',
+            content: `[Earlier conversation summary — older messages compacted]\n${summary.slice(0, 3000)}`,
+          });
+        }
+        for (const msg of recent) {
+          if (msg.role === 'user' || msg.role === 'assistant') {
+            const content = msg.content.length > MAX_CHARS_PER_MSG
+              ? msg.content.slice(0, MAX_CHARS_PER_MSG) + '\n…[truncated]'
+              : msg.content;
+            messages.push({ role: msg.role as 'user' | 'assistant', content });
+          }
+        }
+      } else {
+        for (const msg of ordered) {
+          if (msg.role === 'user' || msg.role === 'assistant') {
+            const content = msg.content.length > MAX_CHARS_PER_MSG
+              ? msg.content.slice(0, MAX_CHARS_PER_MSG) + '\n…[truncated]'
+              : msg.content;
+            messages.push({ role: msg.role as 'user' | 'assistant', content });
+          }
+        }
+      }
+    } catch { /* first message, no history */ }
+  }
+
+  messages.push({ role: 'user', content: message });
+
+  if (!ephemeral) {
+    try { dbInsertMessage(sessionId, 'user', message); } catch { /* ignore */ }
+  }
 
   // Build tool definitions
   const ollamaTools = convertToolsToOllama();
@@ -523,6 +614,7 @@ export async function runClaude(
   let finalText = '';
   let totalEvalCount = 0;
   let totalPromptEvalCount = 0;
+  let continuationNudges = 0;
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -546,8 +638,19 @@ export async function runClaude(
       const toolCalls = response.message.tool_calls;
 
       if (!toolCalls || toolCalls.length === 0) {
-        // No more tool calls — we're done
-        finalText = response.message.content;
+        const text = response.message.content ?? '';
+        // Continuation detection: model hints at future work but didn't call a tool
+        const hasUnfinishedWork = /\b(step\s*\d|next[,:]\s*I|now\s*I('ll|'m going| will| need)|let me (now|proceed|continue|start)|I('ll| will) (now|then|next)|moving on to|phase \d)/i.test(text);
+        const hasCompletionSignal = /^(✅|❌|done|completed|finished|failed|error:|here('s| is) (the|your)|published|deployed)/im.test(text.trim());
+        if (hasUnfinishedWork && !hasCompletionSignal && turn < maxTurns - 1 && continuationNudges < 3) {
+          continuationNudges++;
+          console.log(`[aria] Continuation detected at turn ${turn} — nudging (${continuationNudges}/3)`);
+          messages.push({ role: 'assistant', content: text });
+          messages.push({ role: 'user', content: 'Continue. Do the next step now — use your tools.' });
+          onStream?.({ type: 'text', text: text });
+          continue;
+        }
+        finalText = text;
         break;
       }
 
@@ -560,7 +663,8 @@ export async function runClaude(
 
       for (const toolCall of toolCalls) {
         const toolName = toolCall.function.name;
-        const toolArgs = toolCall.function.arguments ?? {};
+        const rawArgs = toolCall.function.arguments ?? {};
+        const toolArgs = typeof rawArgs === 'string' ? (() => { try { return JSON.parse(rawArgs); } catch { return {}; } })() : rawArgs;
 
         if (corr) log('tool_use', corr, { thread: threadId, tool: toolName });
         onStream?.({ type: 'tool_use', toolName, toolUseId: toolName });
@@ -606,15 +710,75 @@ export async function runClaude(
       }
     }
 
+    // Silent exit safety net: model went silent after tool call
+    const lastMsg = messages[messages.length - 1];
+    if ((!finalText || finalText.trim().length < 10) && lastMsg?.role === 'tool') {
+      console.log('[aria] Model went silent after tool call — forcing summary turn');
+      messages.push({
+        role: 'user',
+        content: 'You just used a tool but did not reply to Boss. Summarize what you did and the result. Start with ✅ or ❌.',
+      });
+      const followUp = await ollamaChat(messages, undefined, model);
+      finalText = followUp.message.content || 'Task completed (no summary available).';
+    }
+
+    // Promise detector: model promised future work but didn't do it (no tools used)
+    const usedTool = messages.some(m => m.role === 'tool');
+    const looksLikePromise = /\b(next steps?:|i (will|'ll) (now |then )?(find|use|run|check|investigate|search|read|write))/im.test(finalText);
+    const looksLikeCompletion = /[✅❌]|^(done|complete|finished|here'?s|i found|the (file|task|fix|result))/im.test(finalText.trim());
+    if (!usedTool && looksLikePromise && !looksLikeCompletion && finalText.length > 30 && finalText.length < 800) {
+      console.log('[aria] Model promised future work without doing it — forcing one more turn');
+      messages.push({ role: 'assistant', content: finalText });
+      messages.push({
+        role: 'user',
+        content: 'You said you would do something next but you stopped. Do those next steps NOW using your tools. Then send me the final result starting with ✅ or ❌.',
+      });
+      const continuation = await ollamaChat(messages, ollamaTools, model);
+      if (continuation.message.tool_calls?.length) {
+        messages.push({
+          role: 'assistant',
+          content: continuation.message.content ?? '',
+          tool_calls: continuation.message.tool_calls,
+        });
+        for (const tc of continuation.message.tool_calls) {
+          const tName = tc.function.name;
+          const rawArgs = tc.function.arguments ?? {};
+          const tArgs = typeof rawArgs === 'string' ? (() => { try { return JSON.parse(rawArgs); } catch { return {}; } })() : rawArgs;
+          let res: string;
+          try {
+            res = extraToolMap.has(tName) ? await extraToolMap.get(tName)!(tArgs) : await executeTool(tName, tArgs);
+          } catch (e) { res = `Tool error: ${(e as Error).message}`; }
+          messages.push({ role: 'tool', content: res });
+          onStream?.({ type: 'tool_use', toolName: tName, toolUseId: tName });
+        }
+        const wrap = await ollamaChat(messages, undefined, model);
+        finalText = wrap.message.content || continuation.message.content || finalText;
+      } else if (continuation.message.content) {
+        finalText = continuation.message.content;
+      }
+    }
+
     if (!finalText && messages.length > 2) {
-      // If we hit max turns, the last assistant message is the answer
       const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
       finalText = lastAssistant?.content ?? 'Max turns reached.';
     }
 
+    // Auto-prepend ✅/❌ marker if tool used but forgot
+    const usedAnyTool = messages.some(m => m.role === 'tool');
+    if (usedAnyTool && finalText && !/[✅❌]/.test(finalText)) {
+      const isError = /\b(error|failed|cannot|unable|blocked|denied|not found|missing)\b/i.test(finalText) &&
+                      !/\b(no error|no issue|fixed|resolved|working|success)\b/i.test(finalText);
+      finalText = (isError ? '❌ ' : '✅ ') + finalText;
+    }
+
+    // Save assistant response to DB (skip if ephemeral)
+    if (finalText && !ephemeral) {
+      try { dbInsertMessage(sessionId, 'assistant', finalText); } catch { /* ignore */ }
+    }
+
     const response: ClaudeResponse = {
       text: finalText,
-      sessionId: null, // Ollama doesn't have sessions — we manage history ourselves
+      sessionId,
       actions: extractActions(finalText),
       usage: {
         input_tokens: totalPromptEvalCount,
@@ -631,6 +795,18 @@ export async function runClaude(
         output_tokens: totalEvalCount,
       });
     }
+
+    // Daily thinking log — records every turn for debugging
+    try {
+      const thinkDir = join(process.cwd(), 'data', 'thinking');
+      if (!existsSync(thinkDir)) mkdirSync(thinkDir, { recursive: true });
+      const date = new Date().toISOString().slice(0, 10);
+      const time = new Date().toISOString().slice(11, 19);
+      const toolsUsed = messages.filter(m => m.role === 'tool').length;
+      const turns = messages.filter(m => m.role === 'assistant').length;
+      const entry = `\n## ${time} UTC [${turns} turns, ${toolsUsed} tools, ${Date.now() - startedAt}ms]\n**User:** ${message.slice(0, 200)}\n**Response:** ${finalText.slice(0, 500)}\n`;
+      appendFileSync(join(thinkDir, `${date}.md`), entry);
+    } catch { /* non-critical */ }
 
     return response;
   } catch (err) {

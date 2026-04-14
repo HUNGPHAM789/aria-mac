@@ -13,6 +13,7 @@ import {
   hasMemoryEmbedding,
   searchMemoryEmbeddings,
   getEmbeddingDim,
+  setEmbeddingDim,
   type MemoryFileRow,
 } from '../db/index.js';
 import { log } from './logger.js';
@@ -66,8 +67,8 @@ function detectProvider(): EmbeddingProvider {
   }
 
   const ollamaUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
-  // Check if Ollama is reachable (non-blocking check happens on first use)
   _provider = 'ollama';
+  setEmbeddingDim(768);
   console.log(`[ARIA] Embedding provider: Ollama (${process.env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text'}, 768-dim) at ${ollamaUrl}`);
   return 'ollama';
 }
@@ -297,12 +298,16 @@ export async function loadHenryMemoryAsync(userMessage?: string, corr?: string):
 
   let vecHits: MemoryFileRow[] = [];
   if (userMessage && isVecEnabled()) {
-    const qEmb = await embedText(userMessage);
-    if (qEmb) {
-      const hits = searchMemoryEmbeddings(qEmb, TOP_K);
-      vecHits = hits
-        .map(h => byId.get(h.id))
-        .filter((r): r is MemoryFileRow => !!r && r.always_load !== 1);
+    try {
+      const qEmb = await embedText(userMessage);
+      if (qEmb) {
+        const hits = searchMemoryEmbeddings(qEmb, TOP_K);
+        vecHits = hits
+          .map(h => byId.get(h.id))
+          .filter((r): r is MemoryFileRow => !!r && r.always_load !== 1);
+      }
+    } catch (err) {
+      console.warn('[ARIA] Memory vector search failed (falling back to keyword):', (err as Error).message.slice(0, 100));
     }
   }
 
@@ -413,29 +418,66 @@ export function loadHenryMemory(userMessage?: string): string {
 
 // ─── Available Skills ────────────────────────────────────────────────────────
 
-const SUBSCRIPTION_SKILLS = [
-  { name: 'henry-skill-creator', desc: "Create, test, improve, and package custom skills for Henry's personal workflow." },
-  { name: 'canvas-design', desc: 'Create beautiful visual art in .png and .pdf documents.' },
-  { name: 'doc-coauthoring', desc: 'Guide through structured documentation co-authoring.' },
-  { name: 'skill-creator', desc: 'Create new skills, modify existing skills, run evals.' },
-];
+// Only skills that work with ARIA's local tools — Claude SDK skills removed
+const SUBSCRIPTION_SKILLS: { name: string; desc: string }[] = [];
 
 export function loadAvailableSkills(): string {
   const allSkills = [...SUBSCRIPTION_SKILLS];
 
   if (existsSync(SKILLS_DIR)) {
     try {
-      const userSkillFiles = readdirSync(SKILLS_DIR).filter(f => f.endsWith('.md'));
-      for (const file of userSkillFiles) {
-        const name = file.replace('.md', '');
-        if (!allSkills.find(s => s.name === name)) {
-          allSkills.push({ name, desc: '(user-created skill)' });
+      const entries = readdirSync(SKILLS_DIR, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          const name = entry.name.replace('.md', '');
+          if (!allSkills.find(s => s.name === name)) {
+            allSkills.push({ name, desc: '(user-created skill)' });
+          }
+        } else if (entry.isDirectory()) {
+          const skillMd = join(SKILLS_DIR, entry.name, 'SKILL.md');
+          if (existsSync(skillMd)) {
+            const name = entry.name;
+            if (!allSkills.find(s => s.name === name)) {
+              const content = readFileSync(skillMd, 'utf-8');
+              const descMatch = content.match(/description:\s*(.+)/);
+              const desc = descMatch?.[1]?.trim() ?? '(user-created skill)';
+              allSkills.push({ name, desc });
+            }
+          }
         }
       }
     } catch { /* skip */ }
   }
 
   return allSkills.map(s => `  • /${s.name} — ${s.desc}`).join('\n');
+}
+
+/** Load the full skill content by name (checks subdir/SKILL.md and flat .md) */
+export function loadSkillContent(name: string): string | null {
+  const subdirPath = join(SKILLS_DIR, name, 'SKILL.md');
+  if (existsSync(subdirPath)) return readFileSync(subdirPath, 'utf-8');
+  const flatPath = join(SKILLS_DIR, `${name}.md`);
+  if (existsSync(flatPath)) return readFileSync(flatPath, 'utf-8');
+  return null;
+}
+
+/** Detect which skill the message is asking about, return injected context */
+export function detectSkillContext(message: string): string {
+  let skillName: string | null = null;
+  const slashMatch = message.match(/^\/([\w-]+)/);
+  if (slashMatch) {
+    skillName = slashMatch[1];
+  } else if (/youtube|video.*learn|extract.*video/i.test(message)) {
+    skillName = 'youtube-learn';
+  } else if (/blog.*post|publish.*blog|henry.*blog/i.test(message)) {
+    skillName = 'henry-blog-post';
+  } else if (/godot|3d.*pixel|isometric.*game/i.test(message)) {
+    skillName = 'godot-3d-pixel-art';
+  }
+  if (!skillName) return '';
+  const content = loadSkillContent(skillName);
+  if (!content) return '';
+  return `\n\n══ ACTIVE SKILL: ${skillName} ══\n${content}\n══ END SKILL ══\n`;
 }
 
 void statSync;

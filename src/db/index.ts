@@ -11,7 +11,7 @@ let _db: Database.Database | null = null;
 let _vecLoaded = false;
 
 // Dynamic embedding dimension — default 3072 (Gemini); overridden at runtime if using Ollama
-let _embeddingDim = 3072;
+let _embeddingDim = 768; // Default to Ollama nomic-embed-text; Gemini overrides to 3072
 
 export function getEmbeddingDim(): number { return _embeddingDim; }
 export function setEmbeddingDim(dim: number): void { _embeddingDim = dim; }
@@ -614,7 +614,7 @@ export function searchSummariesByKeyword(query: string): ConversationSummary[] {
 // ─── Model Selection ─────────────────────────────────────────────────────────
 
 export function getModel(): string {
-  return getPreference('aria_model') ?? 'sonnet';
+  return getPreference('aria_model') ?? process.env.OLLAMA_MODEL ?? 'gemma4:26b';
 }
 
 export function setModel(model: string): void {
