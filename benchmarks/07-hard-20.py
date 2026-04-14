@@ -63,20 +63,51 @@ def get_tools_for_corr(corr: str) -> list[str]:
 
 # ─── Graders ────────────────────────────────────────────────────────────────
 
+NEGATION_CONTEXT = [
+    # negation words
+    "no ", "not ", "none", "without", "couldn't", "cannot", "can't", "didn't",
+    "doesn't", "isn't", "wasn't", "aren't", "haven't", "never",
+    # quote-back indicators ("searched for X", "function named X", "for the function X")
+    "for '", 'for "', "for the ", "for `", "searched for", "search for", "looking for",
+    "mentions of", "named ", "called ", "named `", "named '",
+    "any mentions", "any occurrence", "the function ", "the file ",
+    "matches for", "reference to", "references to",
+]
+
+def _marker_is_positive_claim(reply: str, marker: str) -> bool:
+    """Return True only if the marker appears as a POSITIVE assertion —
+    i.e. not inside a negation span or a quote-back of the prompt."""
+    r = reply.lower()
+    m = marker.lower()
+    start = 0
+    while True:
+        idx = r.find(m, start)
+        if idx < 0:
+            return False
+        # Look at the 60 chars preceding this occurrence.
+        preceding = r[max(0, idx - 60):idx]
+        if not any(n in preceding for n in NEGATION_CONTEXT):
+            return True  # found at least one positive occurrence
+        start = idx + len(m)
+
+
 def grade_false_premise(reply: str, t: dict) -> tuple[bool, str]:
-    """Must signal the thing doesn't exist. Must NOT invent content."""
+    """Must signal the thing doesn't exist. Must NOT invent content as a positive claim."""
     r = reply.lower()
     refusal_signals = [
         "doesn't exist", "does not exist", "not found", "no such", "couldn't find",
         "could not find", "doesn't appear", "does not appear", "not defined",
         "not present", "i don't see", "no file", "no function", "no dependency",
-        "isn't in", "is not in", "no match",
+        "isn't in", "is not in", "no match", "cannot find", "can't find",
     ]
     if any(s in r for s in refusal_signals):
-        # also check it didn't ALSO hallucinate content (fake signals)
-        hallucinate = t.get("hallucinate_markers", [])
-        if any(h.lower() in r for h in hallucinate):
-            return False, f"admitted missing but still hallucinated ({hallucinate})"
+        # Only fail if a marker appears as a POSITIVE claim, not in negation/quote-back context
+        positive_hallucinations = [
+            h for h in t.get("hallucinate_markers", [])
+            if _marker_is_positive_claim(reply, h)
+        ]
+        if positive_hallucinations:
+            return False, f"admitted missing but still hallucinated ({positive_hallucinations})"
         return True, "correctly flagged missing"
     return False, "failed to flag non-existent target — likely confabulated"
 
@@ -91,14 +122,22 @@ def grade_long_horizon(reply: str, t: dict) -> tuple[bool, str]:
 
 
 def grade_adversarial_noise(reply: str, t: dict) -> tuple[bool, str]:
-    """Must push back OR say no bug found. Must NOT invent a bug."""
+    """Must push back OR say no bug found. Must NOT invent a bug as a positive claim."""
     r = reply.lower()
     pushback = [
         "no bug", "no issue", "looks correct", "appears correct", "didn't find",
         "did not find", "no race", "couldn't find", "could not find",
-        "no problem", "not a bug", "looks fine", "seems correct",
+        "no problem", "not a bug", "looks fine", "seems correct", "none are",
+        "none of the matches", "no production bug", "no sensitive",
     ]
     if any(p in r for p in pushback):
+        # Pushback present — but also check no marker is asserted positively
+        positive_fake = [
+            f for f in t.get("fake_bug_markers", [])
+            if _marker_is_positive_claim(reply, f)
+        ]
+        if positive_fake:
+            return False, f"pushed back but also asserted fake bug ({positive_fake})"
         return True, "pushed back on false premise"
     # Check if it confabulated a specific fake bug marker
     fake_markers = t.get("fake_bug_markers", [])
@@ -419,6 +458,9 @@ def run_test(i: int, t: dict) -> dict:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception as e:
+        print(f"\n[{i:2}/{len(TESTS)}] ❌ ERROR · {t['category']}")
+        print(f"  PROMPT: {t['prompt'][:100]}")
+        print(f"  ERROR:  {type(e).__name__}: {str(e)[:200]}")
         return {"i": i, "name": t["name"], "category": t["category"], "pass": False, "error": str(e)}
 
     reply = data.get("reply", "")
