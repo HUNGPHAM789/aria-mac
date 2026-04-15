@@ -13,6 +13,19 @@ import { maybeCompactAsync, buildSummarizerPrompt, type OllamaMessage as Compact
 // repeated compactions instead of being lost each time the middle is dropped.
 const _threadCompactionSummaries = new Map<string, string>();
 
+// Per-thread pending compaction request set by `/compact [focus]`. When present
+// the next in-loop compaction check fires immediately (threshold=0) with the
+// stored focus topic, then the entry is cleared.
+interface PendingCompaction { focusTopic?: string }
+const _pendingCompaction = new Map<string, PendingCompaction>();
+
+/** Queue a /compact <focus> request for a thread. Next turn's compaction
+ *  check on this thread will fire immediately, bias the summary toward
+ *  `focusTopic` (if provided), and clear the entry. */
+export function requestCompaction(threadId: string, focusTopic?: string): void {
+  _pendingCompaction.set(threadId, { focusTopic: focusTopic?.trim() || undefined });
+}
+
 // Default LLM summarizer — reuses ollamaChat with a one-shot prompt and no
 // tools. On ARIA_LLM=claude we still use Ollama here to avoid burning a Claude
 // turn on a side-channel summary (cheap + local is the right call for this).
@@ -810,9 +823,13 @@ export async function runClaude(
       // on summarizer failure or cooldown. Pass prior summary so info from
       // earlier compactions on this thread survives.
       const priorSummary = threadId ? _threadCompactionSummaries.get(threadId) : undefined;
+      const pending = threadId ? _pendingCompaction.get(threadId) : undefined;
+      if (pending && threadId) _pendingCompaction.delete(threadId);
       const compaction = await maybeCompactAsync(messages as unknown as CompactorMessage[], {
         previousSummary: priorSummary,
         summarizer: defaultSummarizer,
+        focusTopic: pending?.focusTopic,
+        ...(pending ? { thresholdTokens: 0 } : {}),
       });
       if (compaction.compressed) {
         console.log(`[aria] Context compacted at turn ${turn}: ${compaction.before.tokens}→${compaction.after.tokens} tokens (${compaction.before.count}→${compaction.after.count} msgs)`);

@@ -241,6 +241,20 @@ async function main() {
           if (!message) { res.writeHead(400); res.end(JSON.stringify({ error: 'No message' })); return; }
           const corr = newCorrelationId();
           const threadId = 'claude:live-test';
+          // /compact [focus] — queue a focused compaction on this thread.
+          // Runs before runClaude so the next model turn consumes it.
+          const compactMatch = /^\s*\/compact(?:\s+(.*))?\s*$/i.exec(message);
+          if (compactMatch) {
+            const { requestCompaction } = await import('../aria/core.js');
+            const focus = (compactMatch[1] ?? '').trim();
+            requestCompaction(threadId, focus || undefined);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ reply: focus
+              ? `🧭 Compaction queued — next turn will summarize with focus: ${focus}`
+              : '🧭 Compaction queued — next turn will summarize this thread.',
+              elapsed: '0.0', taskType: 'command', corr }));
+            return;
+          }
           const identityMd = loadIdentity();
           const traits = loadTraitsFromDb();
           const henryMemory = await loadHenryMemoryAsync(message, corr);

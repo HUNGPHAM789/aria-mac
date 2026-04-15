@@ -1,5 +1,5 @@
 import { bot } from './bot.js';
-import { runClaude, buildSystemPrompt, stripActionBlocks, type StreamEvent } from '../aria/core.js';
+import { runClaude, buildSystemPrompt, stripActionBlocks, requestCompaction, type StreamEvent } from '../aria/core.js';
 import { runTask, classifyTask } from '../aria/task-runner.js';
 import { loadIdentity, loadTraitsFromDb } from '../aria/identity.js';
 import { loadHenryMemoryAsync, loadAvailableSkills, detectSkillContext } from '../aria/memory.js';
@@ -148,6 +148,16 @@ bot.command('skills', async (ctx) => {
 bot.command('newchat', async (ctx) => {
   clearThreadSessionId(threadIdFor(ctx));
   await ctx.reply('🔄 New conversation started. Previous context cleared for this chat.');
+});
+
+bot.command('compact', async (ctx) => {
+  const tid = threadIdFor(ctx);
+  // telegraf strips the command itself; the rest of the message is the focus.
+  const text = (ctx.message && 'text' in ctx.message ? ctx.message.text : '') as string;
+  const focus = text.replace(/^\/compact(@\S+)?\s*/i, '').trim();
+  requestCompaction(tid, focus || undefined);
+  if (focus) await ctx.reply(`🧭 Compaction queued — next turn will summarize with focus: *${focus}*`, { parse_mode: 'Markdown' });
+  else await ctx.reply('🧭 Compaction queued — next turn will summarize this thread.');
 });
 
 bot.command('reindex', async (ctx) => {
