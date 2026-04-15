@@ -224,28 +224,43 @@ bot.command('restart', async (ctx) => {
 });
 
 bot.command('model', async (ctx) => {
+  const { MODEL_ALIASES, FALLBACK_CHAIN, resolveModel, isValidAliasOrLegacy } = await import('../aria/model-aliases.js');
   const parts = ctx.message.text.split(/\s+/);
   const newModel = parts[1];
 
+  const formatList = () => Object.values(MODEL_ALIASES)
+    .map(m => `  • \`${m.alias}\` — ${m.label}`)
+    .join('\n');
+
   if (!newModel) {
     const current = getModel();
+    const resolved = resolveModel(current);
     await ctx.reply(
-      `Current model: \`${current}\`\n\nUsage: /model <name>\nOptions: \`sonnet\`, \`opus\`, \`claude-sonnet-4-6\`, \`claude-opus-4-6\`, \`ollama:<model>\``,
+      `*Current:* \`${current}\` → ${resolved.label}\n\n` +
+      `*Fallback chain:* ${FALLBACK_CHAIN.join(' → ')}\n` +
+      `If the primary errors (auth/rate_limit/model_not_found/server) ARIA retries the next.\n\n` +
+      `*Available aliases:*\n${formatList()}\n\n` +
+      `*Usage:* \`/model <alias>\`\n` +
+      `Advanced: raw \`claude-<name>\` or \`ollama:<name>\` still accepted.`,
       { parse_mode: 'Markdown' },
     );
     return;
   }
 
-  // Allow Claude models and ollama:<model> format
-  const allowedPrefixes = ['sonnet', 'opus', 'claude-sonnet-4-6', 'claude-opus-4-6'];
-  const isOllama = newModel.startsWith('ollama:');
-  if (!allowedPrefixes.includes(newModel) && !isOllama) {
-    await ctx.reply(`Unknown model: ${newModel}\nAllowed: ${allowedPrefixes.join(', ')}, or ollama:<model_name>`);
+  if (!isValidAliasOrLegacy(newModel)) {
+    await ctx.reply(
+      `Unknown model: \`${newModel}\`\n\n*Available aliases:*\n${formatList()}`,
+      { parse_mode: 'Markdown' },
+    );
     return;
   }
 
   setModel(newModel);
-  await ctx.reply(`✅ Model switched to \`${newModel}\`. Takes effect on next message.`, { parse_mode: 'Markdown' });
+  const resolved = resolveModel(newModel);
+  await ctx.reply(
+    `✅ Model switched to \`${newModel}\` → ${resolved.label}\n_Takes effect on next message._`,
+    { parse_mode: 'Markdown' },
+  );
 });
 
 bot.command('search', async (ctx) => {

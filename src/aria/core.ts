@@ -659,6 +659,9 @@ export interface RunClaudeOptions {
   ephemeral?: boolean;
 }
 
+import { resolveFallbackChain, resolveModel, type ResolvedModel } from './model-aliases.js';
+import { classifyError } from './error-classifier.js';
+
 export async function runClaude(
   message: string,
   systemPrompt: string,
@@ -671,12 +674,54 @@ export async function runClaude(
       ? { sessionId: optsOrSessionId, onStream: legacyOnStream, model: legacyModel }
       : optsOrSessionId;
 
-  // Route to Claude Agent SDK when ARIA_LLM=claude. Ollama otherwise (default).
-  if ((process.env.ARIA_LLM ?? '').toLowerCase() === 'claude') {
+  // Resolve alias → provider chain. Primary is whatever opts.model (or the
+  // stored DB pref upstream) names; fallback sequence ensures a Claude outage
+  // drops to gemma then gpt-oss instead of failing silently.
+  const chain = resolveFallbackChain(opts.model);
+  let lastErr: unknown = null;
+  for (let i = 0; i < chain.length; i++) {
+    const resolved = chain[i];
+    try {
+      return await runOnProvider(message, systemPrompt, { ...opts, model: resolved.model }, resolved);
+    } catch (err) {
+      lastErr = err;
+      const cls = classifyError(err, { provider: resolved.provider });
+      const nextAlias = chain[i + 1]?.alias ?? null;
+      if (opts.corr) {
+        log('error_classified', opts.corr, {
+          alias: resolved.alias, provider: resolved.provider, model: resolved.model,
+          reason: cls.reason, status: cls.status, nextAlias,
+        });
+      }
+      // Don't fallback on caller-side problems (context overflow → caller should compact).
+      if (cls.reason === 'context_overflow') throw err;
+      // Last one in the chain — bubble up the error.
+      if (i === chain.length - 1) break;
+      // Only continue if the classifier says this error is worth trying another model for.
+      if (!cls.should_fallback && !cls.retryable && cls.reason !== 'model_not_found') throw err;
+    }
+  }
+  throw lastErr ?? new Error('runClaude: fallback chain exhausted with no error recorded');
+}
+
+async function runOnProvider(
+  message: string,
+  systemPrompt: string,
+  opts: RunClaudeOptions,
+  resolved: ResolvedModel,
+): Promise<ClaudeResponse> {
+  if (resolved.provider === 'claude') {
     const { runClaudeBackend } = await import('./claude-backend.js');
     return runClaudeBackend({ message, systemPrompt, opts });
   }
+  return runOllamaAgent(message, systemPrompt, opts);
+}
 
+async function runOllamaAgent(
+  message: string,
+  systemPrompt: string,
+  opts: RunClaudeOptions,
+): Promise<ClaudeResponse> {
   const { onStream, model, corr, threadId, extraTools, maxTurns = 40, ephemeral = false } = opts;
   const startedAt = Date.now();
   const sessionId = opts.sessionId ?? (threadId ? `session:${threadId}` : `session:${Date.now()}`);

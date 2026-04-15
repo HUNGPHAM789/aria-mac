@@ -712,7 +712,9 @@ export function searchSummariesByKeyword(query: string): ConversationSummary[] {
 // ─── Model Selection ─────────────────────────────────────────────────────────
 
 export function getModel(): string {
-  return getPreference('aria_model') ?? process.env.OLLAMA_MODEL ?? 'gemma4:26b';
+  // Default to the 'sonnet' alias so a fresh DB routes through Claude SDK
+  // with automatic fallback to gemma → gpt-oss on outage (see model-aliases.ts).
+  return getPreference('aria_model') ?? 'sonnet';
 }
 
 export function setModel(model: string): void {
