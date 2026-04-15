@@ -45,6 +45,24 @@ export const SKILL_THREAT_PATTERNS: ThreatPattern[] = [
     reason: 'Modifies shell rc file for persistence (.bashrc / .zshrc / .profile / .bash_profile)',
     regex: /(?:>>?|tee(?:\s+-a)?)\s+[^\n|]*~?\/?\.(?:bashrc|zshrc|profile|bash_profile|zprofile)/i,
   },
+  {
+    id: 'curl_pipe_shell',
+    severity: 'critical',
+    reason: 'Executes unreviewed remote script (curl/wget piped to bash or sh)',
+    regex: /(?:curl|wget)[^\n|]{0,200}\|\s*(?:sudo\s+)?(?:bash|sh|zsh|ksh|python[23]?|node|ruby|perl)\b/i,
+  },
+  {
+    id: 'rm_rf_root',
+    severity: 'critical',
+    reason: 'Destructive recursive-force delete of root / home / system path',
+    regex: /\brm\s+[^\n]*-[a-z]*[rf][a-z]*[rf][a-z]*\s+(?:\/|~|\$HOME|--no-preserve-root)/i,
+  },
+  {
+    id: 'reverse_shell',
+    severity: 'critical',
+    reason: 'Opens reverse shell to attacker-controlled host (bash /dev/tcp, nc -e, mkfifo pipe)',
+    regex: /(?:bash\s+-i\s*>(?:&|\s*\/dev\/tcp)|nc\s+[^\n]{0,80}-e\s*(?:bash|sh|\/bin\/[a-z]+)|mkfifo\s+[^\n]*\s*\|\s*(?:bash|sh)\b)/i,
+  },
 ];
 
 export interface ScanHit {
