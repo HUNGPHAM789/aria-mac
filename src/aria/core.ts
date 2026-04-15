@@ -280,7 +280,10 @@ AGENT DISPATCH & COORDINATION:
 - workspace_status — check shared workspace files
 
 IDENTITY & SKILLS:
-- create_skill — write a new skill
+- create_skill — write a new skill (requires --- frontmatter with name + description)
+- edit_skill — replace the entire SKILL.md of an existing skill
+- patch_skill — exact-string find-and-replace inside a skill file
+- delete_skill — permanently remove a skill (not reversible without git)
 - update_traits — persist learned traits about Boss
 
 SCHEDULING:

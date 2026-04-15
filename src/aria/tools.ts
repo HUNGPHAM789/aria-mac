@@ -4,7 +4,7 @@ import { getAgentMessages, insertAgentMessage, listAllProjects, upsertProject } 
 import { listWorkspaceFiles, workspaceSummary } from './workspace.js';
 import { getProjectContext, searchCodebase } from './codebase.js';
 import { searchSummaries, loadRecentSessionContext } from './summarizer.js';
-import { createSkill } from './skills.js';
+import { createSkill, editSkill, patchSkill, deleteSkill } from './skills.js';
 import { updateIdentityTraits, appendEvolutionLog } from './identity.js';
 import { sendToJarvis } from './jarvis.js';
 import { log } from './logger.js';
@@ -79,6 +79,79 @@ export function buildAriaTools(ctx: AriaToolContext): AriaTool[] {
           return `Skill created at ${result.filePath}.${note}`;
         } catch (err) {
           return `REFUSED: create_skill failed — ${(err as Error).message}`;
+        }
+      },
+    },
+    {
+      name: 'edit_skill',
+      description: 'Replace the entire SKILL.md of an existing skill with new content. New content must pass all validation (frontmatter + security scan).',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_name: { type: 'string' },
+          content: { type: 'string', description: 'Full replacement SKILL.md including frontmatter' },
+        },
+        required: ['skill_name', 'content'],
+      },
+      execute: async (args) => {
+        try {
+          const result = editSkill({
+            skill_name: String(args.skill_name ?? ''),
+            content: String(args.content ?? ''),
+          });
+          const note = result.scan.verdict === 'caution' ? ` Note: security scan flagged (${result.scan.summary}).` : '';
+          return `Skill '${result.name}' edited.${note}`;
+        } catch (err) {
+          return `REFUSED: edit_skill failed — ${(err as Error).message}`;
+        }
+      },
+    },
+    {
+      name: 'patch_skill',
+      description: 'Exact-string find-and-replace inside a skill file. Use file_path for references/*.md inside a subdir skill; omit to target SKILL.md itself.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_name: { type: 'string' },
+          old_string: { type: 'string', description: 'Exact text to find. Include enough context to be unique, or set replace_all.' },
+          new_string: { type: 'string' },
+          replace_all: { type: 'boolean', description: 'Replace every occurrence; otherwise old_string must match exactly once.' },
+          file_path: { type: 'string', description: 'Optional: relative path inside the skill subdir (e.g. references/foo.md).' },
+        },
+        required: ['skill_name', 'old_string', 'new_string'],
+      },
+      execute: async (args) => {
+        try {
+          const result = patchSkill({
+            skill_name: String(args.skill_name ?? ''),
+            old_string: String(args.old_string ?? ''),
+            new_string: String(args.new_string ?? ''),
+            replace_all: Boolean(args.replace_all ?? false),
+            file_path: args.file_path ? String(args.file_path) : undefined,
+          });
+          const note = result.scan.verdict === 'caution' ? ` Note: security scan flagged (${result.scan.summary}).` : '';
+          return `Skill '${result.name}' patched (${result.replacements} replacement${result.replacements === 1 ? '' : 's'}).${note}`;
+        } catch (err) {
+          return `REFUSED: patch_skill failed — ${(err as Error).message}`;
+        }
+      },
+    },
+    {
+      name: 'delete_skill',
+      description: 'Permanently delete a skill from ~/.claude/skills/. Use carefully — not reversible without git.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_name: { type: 'string' },
+        },
+        required: ['skill_name'],
+      },
+      execute: async (args) => {
+        try {
+          const result = deleteSkill(String(args.skill_name ?? ''));
+          return `Skill '${result.name}' deleted (${result.removed}).`;
+        } catch (err) {
+          return `REFUSED: delete_skill failed — ${(err as Error).message}`;
         }
       },
     },

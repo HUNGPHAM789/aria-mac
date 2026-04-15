@@ -234,6 +234,11 @@ export function getAllSkills(): { skill_name: string; description: string }[] {
     .all() as { skill_name: string; description: string }[];
 }
 
+export function deleteSkillRow(name: string): boolean {
+  const info = getDb().prepare('DELETE FROM skills WHERE skill_name = ?').run(name);
+  return info.changes > 0;
+}
+
 // ─── Preferences ─────────────────────────────────────────────────────────────
 
 export function upsertPreference(key: string, value: string): void {
