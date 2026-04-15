@@ -443,7 +443,7 @@ function extractJsonBlocks(text: string): string[] {
   return blocks;
 }
 
-function extractActions(text: string): ParsedAction[] {
+export function extractActions(text: string): ParsedAction[] {
   const actions: ParsedAction[] = [];
   for (const block of extractJsonBlocks(text)) {
     try {
@@ -572,6 +572,12 @@ export async function runClaude(
     typeof optsOrSessionId === 'string' || optsOrSessionId === undefined
       ? { sessionId: optsOrSessionId, onStream: legacyOnStream, model: legacyModel }
       : optsOrSessionId;
+
+  // Route to Claude Agent SDK when ARIA_LLM=claude. Ollama otherwise (default).
+  if ((process.env.ARIA_LLM ?? '').toLowerCase() === 'claude') {
+    const { runClaudeBackend } = await import('./claude-backend.js');
+    return runClaudeBackend({ message, systemPrompt, opts });
+  }
 
   const { onStream, model, corr, threadId, extraTools, maxTurns = 40, ephemeral = false } = opts;
   const startedAt = Date.now();
