@@ -153,6 +153,13 @@ export interface CompactOptions {
   /** Memory-provider pre-compress hook (Phase C.5). Result embedded in the
    *  summarizer prompt so memory insights survive compaction. */
   preCompressHook?: PreCompressHook;
+  /** Ground-truth input token count from the most recent model response
+   *  (Ollama's `prompt_eval_count` / OpenAI's `prompt_tokens`). The chars/4
+   *  estimator undercounts tool-schema JSON by ~5× — when a real number is
+   *  available we use max(estimate, known) for the threshold decision so a
+   *  thread can't blow past its context window while the estimator thinks
+   *  it's safe. */
+  knownInputTokens?: number;
 }
 
 // Phase C.3 — module-level failure cooldown. After an LLM summarization
@@ -241,7 +248,7 @@ const _TEMPLATE_SECTIONS = `## Goal
 [What remains to be done — framed as context, not instructions]
 
 ## Critical Context
-[Any specific values, error messages, configuration details, or data that would be lost without explicit preservation]
+[Any specific values, error messages, configuration details, or data that would be lost without explicit preservation. PRESERVE EXACT STRINGS — literal identifiers, magic words, UUIDs, numeric IDs, file hashes, passwords, tokens, error codes, and any unique marker the user planted. Quote them verbatim. A single lost identifier can invalidate the entire continuation.]
 
 ## Tools & Patterns
 [Which tools were used, how they were used effectively, and any tool-specific discoveries]
@@ -332,7 +339,9 @@ export async function maybeCompactAsync(messages: OllamaMessage[], opts: Compact
   const protectLast = Math.max(2, opts.protectLast ?? DEFAULT_PROTECT_LAST);
 
   const beforeCount = messages.length;
-  const beforeTokens = estimateTotalTokens(messages);
+  const estimated = estimateTotalTokens(messages);
+  const known = Math.max(0, opts.knownInputTokens ?? 0);
+  const beforeTokens = Math.max(estimated, known);
 
   if (beforeTokens < threshold || messages.length <= protectFirst + protectLast + 1) {
     return {
@@ -401,9 +410,11 @@ export function maybeCompact(messages: OllamaMessage[], opts: CompactOptions = {
   const threshold = opts.thresholdTokens ?? (Number.isFinite(envThreshold) && envThreshold > 0 ? envThreshold : DEFAULT_THRESHOLD);
   const protectFirst = Math.max(1, opts.protectFirst ?? DEFAULT_PROTECT_FIRST);
   const protectLast = Math.max(2, opts.protectLast ?? DEFAULT_PROTECT_LAST);
+  const known = Math.max(0, opts.knownInputTokens ?? 0);
 
   const beforeCount = messages.length;
-  const beforeTokens = estimateTotalTokens(messages);
+  const estimated = estimateTotalTokens(messages);
+  const beforeTokens = Math.max(estimated, known);
 
   if (beforeTokens < threshold || messages.length <= protectFirst + protectLast + 1) {
     return {

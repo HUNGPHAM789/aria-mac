@@ -61,12 +61,21 @@ export function poolSnapshot(): PoolSnapshot[] {
 
 // Default LLM summarizer — routes through the D.4 retry orchestrator so a
 // rate-limited / unavailable provider rotates credentials or falls back to
-// the next provider in the chain (ARIA_PROVIDER_CHAIN). Chain construction
-// is lazy so tests + bench runs don't build pools they'll never use.
+// the next provider in the chain. The summarizer uses its OWN chain
+// (ARIA_SUMMARIZER_CHAIN, default "claude,ollama") rather than the main
+// provider chain, because a strong model preserves specific tokens in the
+// summary far more reliably than gemma4:26b summarizing itself — bench 09
+// caught gemma dropping a literal marker string in a 4-compaction run.
 import { resolveChain, runWithFallback, ProviderChainExhaustedError } from './providers/index.js';
 let _compactionChain: ReturnType<typeof resolveChain> | null = null;
 function compactionChain(): ReturnType<typeof resolveChain> {
-  if (!_compactionChain) _compactionChain = resolveChain();
+  if (!_compactionChain) {
+    const raw = process.env.ARIA_SUMMARIZER_CHAIN?.trim();
+    const ids = raw
+      ? raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+      : ['claude', 'ollama'];
+    _compactionChain = resolveChain(ids);
+  }
   return _compactionChain;
 }
 
@@ -800,10 +809,45 @@ async function runOllamaAgent(
   let lastToolOutput = '';
   let totalEvalCount = 0;
   let totalPromptEvalCount = 0;
+  // Per-turn (not accumulated) ground-truth input token count from Ollama's
+  // most recent response. Used by maybeCompactAsync to decide whether to
+  // compact: the chars/4 estimate misses tool-schema JSON that Ollama charges
+  // against input, so a thread can blow past its context window while the
+  // estimator thinks it's safe. Bench 09 showed a 5× undercount on gemma.
+  let lastPromptEvalCount = 0;
   let continuationNudges = 0;
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
+      // Pre-turn compaction check — fires BEFORE the model call when the
+      // prior turn's Ollama input_tokens or our message-array estimate
+      // indicate the next call would exceed the threshold. Runs here (not
+      // only after tool batches) so text-only responses that would
+      // otherwise break out of the loop don't leave an oversized history
+      // behind, and more importantly so we compact BEFORE pushing another
+      // turn into a model that's already near its context ceiling.
+      if (turn > 0) {
+        const priorSummary = threadId ? _threadCompactionSummaries.get(threadId) : undefined;
+        const pending = threadId ? _pendingCompaction.get(threadId) : undefined;
+        if (pending && threadId) _pendingCompaction.delete(threadId);
+        const preCompact = await maybeCompactAsync(messages as unknown as CompactorMessage[], {
+          previousSummary: priorSummary,
+          summarizer: defaultSummarizer,
+          preCompressHook: memoryOnPreCompress as PreCompressHook,
+          focusTopic: pending?.focusTopic,
+          knownInputTokens: lastPromptEvalCount,
+          ...(pending ? { thresholdTokens: 0 } : {}),
+        });
+        if (preCompact.compressed) {
+          console.log(`[aria] Context compacted pre-turn ${turn}: ${preCompact.before.tokens}→${preCompact.after.tokens} tokens (${preCompact.before.count}→${preCompact.after.count} msgs)`);
+          const usedLlm = preCompact.summary?.includes('<compacted-summary') ?? false;
+          if (corr) log('context_compacted', corr, { thread: threadId, beforeTokens: preCompact.before.tokens, afterTokens: preCompact.after.tokens, beforeCount: preCompact.before.count, afterCount: preCompact.after.count, llm: usedLlm, phase: 'pre-turn' });
+          messages.length = 0;
+          messages.push(...(preCompact.messages as unknown as OllamaMessage[]));
+          if (threadId && preCompact.summary) _threadCompactionSummaries.set(threadId, preCompact.summary);
+        }
+      }
+
       let response: OllamaChatResponse;
 
       if (onStream && turn === 0) {
@@ -820,6 +864,7 @@ async function runOllamaAgent(
 
       totalEvalCount += response.eval_count ?? 0;
       totalPromptEvalCount += response.prompt_eval_count ?? 0;
+      lastPromptEvalCount = response.prompt_eval_count ?? lastPromptEvalCount;
 
       const toolCalls = response.message.tool_calls;
 
@@ -930,6 +975,7 @@ async function runOllamaAgent(
         summarizer: defaultSummarizer,
         preCompressHook: memoryOnPreCompress as PreCompressHook,
         focusTopic: pending?.focusTopic,
+        knownInputTokens: lastPromptEvalCount,
         ...(pending ? { thresholdTokens: 0 } : {}),
       });
       if (compaction.compressed) {
