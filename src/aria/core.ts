@@ -920,7 +920,23 @@ export async function runClaude(
 
     return response;
   } catch (err) {
-    if (corr) logError(corr, err, { thread: threadId, ms: Date.now() - startedAt });
+    if (corr) {
+      const { classifyError } = await import('./error-classifier.js');
+      const classified = classifyError(err, {
+        provider: 'ollama',
+        approx_tokens: totalPromptEvalCount + totalEvalCount,
+        num_messages: messages.length,
+      });
+      log('error_classified', corr, {
+        thread: threadId,
+        reason: classified.reason,
+        status: classified.status,
+        retryable: classified.retryable,
+        should_compress: classified.should_compress,
+        summary: classified.summary,
+      });
+      logError(corr, err, { thread: threadId, ms: Date.now() - startedAt, classified: classified.reason });
+    }
     throw err;
   }
 }

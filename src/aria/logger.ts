@@ -40,6 +40,7 @@ export type LogEvent =
   | 'tool_call_truncated'
   | 'background_review_done'
   | 'context_compacted'
+  | 'error_classified'
   | 'agent_spawned'
   | 'agent_spawn_rejected'
   | 'tool_permission'
