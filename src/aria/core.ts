@@ -302,6 +302,7 @@ SMART CONTEXT:
 - register_project — register a new project for indexing
 - list_projects — see all registered projects
 - recall — semantic search across conversations, memory, and codebases
+- session_search — FTS5 full-text search prior messages ("phrase", prefix*, OR, NEAR)
 
 FILESYSTEM & CODE:
 - Bash — execute shell commands

@@ -1,6 +1,6 @@
 // src/aria/tools.ts — ARIA action tools (direct functions, no MCP)
 import { spawnAgent, AGENT_TYPES, getActiveAgentInfo } from './agents.js';
-import { getAgentMessages, insertAgentMessage, listAllProjects, upsertProject } from '../db/index.js';
+import { getAgentMessages, insertAgentMessage, listAllProjects, upsertProject, searchMessagesFts } from '../db/index.js';
 import { listWorkspaceFiles, workspaceSummary } from './workspace.js';
 import { getProjectContext, searchCodebase } from './codebase.js';
 import { searchSummaries, loadRecentSessionContext } from './summarizer.js';
@@ -134,6 +134,31 @@ export function buildAriaTools(ctx: AriaToolContext): AriaTool[] {
         } catch (err) {
           return `REFUSED: patch_skill failed — ${(err as Error).message}`;
         }
+      },
+    },
+    {
+      name: 'session_search',
+      description: 'Full-text search prior conversation messages (all sessions). Supports FTS5 syntax: bare words, "exact phrase", prefix*, OR, NOT, NEAR(a b 3). Returns ranked snippets with <mark>…</mark> around matches.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'FTS5 query string' },
+          limit: { type: 'number', description: 'Max results (default 12)' },
+        },
+        required: ['query'],
+      },
+      execute: async (args) => {
+        const query = String(args.query ?? '').trim();
+        if (!query) return 'session_search requires a non-empty query.';
+        const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 50) : 12;
+        const hits = searchMessagesFts(query, limit);
+        if (hits.length === 0) return `No matches for "${query}".`;
+        const lines = hits.map((h, i) => {
+          const when = new Date(h.createdAt * 1000).toISOString().slice(0, 16).replace('T', ' ');
+          const cleaned = h.snippet.replace(/\s+/g, ' ').trim();
+          return `${i + 1}. [${when} · ${h.sessionId.slice(0, 24)} · ${h.role}]\n   ${cleaned}`;
+        });
+        return `Found ${hits.length} match${hits.length === 1 ? '' : 'es'} for "${query}":\n\n${lines.join('\n\n')}`;
       },
     },
     {

@@ -56,6 +56,44 @@ export function getDb(): Database.Database {
     _db.exec('ALTER TABLE agent_tasks ADD COLUMN parent_task_id TEXT');
   }
 
+  // FTS5 over messages — content-synced, auto-maintained via triggers.
+  // Enables `session_search` tool to query prior conversations by text.
+  try {
+    _db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        session_id UNINDEXED,
+        role UNINDEXED,
+        content='messages',
+        content_rowid='id',
+        tokenize='porter unicode61 remove_diacritics 2'
+      );
+      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content, session_id, role)
+        VALUES (new.id, new.content, new.session_id, new.role);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+        VALUES('delete', old.id, old.content, old.session_id, old.role);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+        VALUES('delete', old.id, old.content, old.session_id, old.role);
+        INSERT INTO messages_fts(rowid, content, session_id, role)
+        VALUES (new.id, new.content, new.session_id, new.role);
+      END;
+    `);
+    // Backfill if the FTS table is empty but messages exist (first-run on existing DB).
+    const ftsCount = (_db.prepare('SELECT COUNT(*) as c FROM messages_fts').get() as { c: number }).c;
+    const msgCount = (_db.prepare('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+    if (msgCount > 0 && ftsCount < msgCount) {
+      _db.exec(`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`);
+      console.log(`[ARIA] messages_fts backfilled for ${msgCount} rows`);
+    }
+  } catch (err) {
+    console.warn('[ARIA] messages_fts create failed:', (err as Error).message);
+  }
+
   // Create vec0 virtual tables after extension is loaded
   if (_vecLoaded) {
     try {
@@ -97,6 +135,61 @@ export function getRecentMessages(sessionId: string, limit = 20): { role: string
   return getDb()
     .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(sessionId, limit) as { role: string; content: string }[];
+}
+
+export interface MessageSearchHit {
+  rowid: number;
+  sessionId: string;
+  role: string;
+  snippet: string;
+  createdAt: number;
+  rank: number;
+}
+
+// FTS5 search across ALL prior messages. Returns ranked snippets with
+// <mark>…</mark> highlighting on the matched terms. Query supports
+// FTS5 syntax: bare words, "exact phrase", prefix*, OR, NOT, NEAR(a b).
+export function searchMessagesFts(query: string, limit = 12): MessageSearchHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    const rows = getDb()
+      .prepare(`
+        SELECT
+          m.id         AS rowid,
+          m.session_id AS sessionId,
+          m.role       AS role,
+          snippet(messages_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
+          m.created_at AS createdAt,
+          bm25(messages_fts) AS rank
+        FROM messages_fts
+        JOIN messages m ON m.id = messages_fts.rowid
+        WHERE messages_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `)
+      .all(q, limit) as MessageSearchHit[];
+    return rows;
+  } catch (err) {
+    // Any FTS5 parse/column error (e.g. 'no such column: xyz' when user
+    // query contains dashes that FTS5 parses as column syntax) → fall
+    // back to LIKE so the user gets something rather than a crash.
+    const like = `%${q.replace(/[%_]/g, '\\$&')}%`;
+    try {
+      return getDb()
+        .prepare(`
+          SELECT id AS rowid, session_id AS sessionId, role, substr(content, 1, 200) AS snippet,
+                 created_at AS createdAt, 0 AS rank
+          FROM messages
+          WHERE content LIKE ? ESCAPE '\\'
+          ORDER BY created_at DESC
+          LIMIT ?
+        `)
+        .all(like, limit) as MessageSearchHit[];
+    } catch {
+      throw err; // original FTS error wins if LIKE also fails
+    }
+  }
 }
 
 // ─── Agent Tasks ─────────────────────────────────────────────────────────────
