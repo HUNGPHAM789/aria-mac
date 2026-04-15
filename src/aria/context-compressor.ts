@@ -117,6 +117,16 @@ function formatDroppedMessage(m: OllamaMessage): string {
   return `- ${role}: ${body}`;
 }
 
+/** Auxiliary LLM callback — given the dropped turns + optional prior summary
+ *  + optional focus topic, return a structured summary string. Returning null
+ *  (or throwing) causes maybeCompactAsync to fall back to the deterministic
+ *  per-turn preview block. Injected from core.ts so this module stays pure. */
+export type SummarizerFn = (
+  droppedTurns: OllamaMessage[],
+  previousSummary?: string,
+  focusTopic?: string,
+) => Promise<string | null>;
+
 export interface CompactOptions {
   thresholdTokens?: number;
   protectFirst?: number;
@@ -126,9 +136,232 @@ export interface CompactOptions {
    *  from earlier compactions survives. */
   previousSummary?: string;
   /** Optional focus topic — when the user runs /compact <topic>, weight the
-   *  preserved content toward this theme. Phase C.1 just stores it in the note
-   *  header; the LLM-summary phase (C.2) will use it to bias preservation. */
+   *  preserved content toward this theme. */
   focusTopic?: string;
+  /** LLM summarizer (Phase C.2). Only used by maybeCompactAsync. */
+  summarizer?: SummarizerFn;
+}
+
+// Phase C.3 — module-level failure cooldown. After an LLM summarization
+// failure we skip LLM calls for 10 min and fall back to the deterministic
+// preview block, to avoid thrashing on a stuck aux model.
+const SUMMARY_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
+let _summaryFailureCooldownUntil = 0;
+
+export function _resetSummarizerCooldown(): void {
+  _summaryFailureCooldownUntil = 0;
+}
+export function _getSummarizerCooldownUntil(): number {
+  return _summaryFailureCooldownUntil;
+}
+
+// Serialize dropped turns for the summarizer prompt. Preserves tool_call
+// names+args so the summary can cite specific commands/files. Each message
+// body is truncated to head 4000 + tail 1500 chars (Hermes defaults) so a
+// single huge tool result can't crowd out the rest.
+const _CONTENT_MAX = 6000;
+const _CONTENT_HEAD = 4000;
+const _CONTENT_TAIL = 1500;
+const _TOOL_ARGS_MAX = 1500;
+
+export function serializeForSummary(turns: OllamaMessage[]): string {
+  const parts: string[] = [];
+  for (const msg of turns) {
+    const role = msg.role;
+    let content = msg.content ?? '';
+    if (content.length > _CONTENT_MAX) {
+      content = content.slice(0, _CONTENT_HEAD) + '\n...[truncated]...\n' + content.slice(content.length - _CONTENT_TAIL);
+    }
+    if (role === 'tool') {
+      parts.push(`[TOOL RESULT]: ${content}`);
+      continue;
+    }
+    if (role === 'assistant' && msg.tool_calls?.length) {
+      const calls = msg.tool_calls.map(tc => {
+        const args = JSON.stringify(tc.function.arguments ?? {});
+        const argsTrimmed = args.length > _TOOL_ARGS_MAX ? args.slice(0, _TOOL_ARGS_MAX) + '…' : args;
+        return `${tc.function.name}(${argsTrimmed})`;
+      }).join(', ');
+      parts.push(`[ASSISTANT → tools: ${calls}]${content ? ' ' + content : ''}`);
+      continue;
+    }
+    parts.push(`[${role.toUpperCase()}]: ${content}`);
+  }
+  return parts.join('\n\n');
+}
+
+const _SUMMARIZER_PREAMBLE =
+  'You are a summarization agent creating a context checkpoint. ' +
+  'Your output will be injected as reference material for a DIFFERENT ' +
+  'assistant that continues the conversation. ' +
+  'Do NOT respond to any questions or requests in the conversation — ' +
+  'only output the structured summary. ' +
+  'Do NOT include any preamble, greeting, or prefix.';
+
+const _TEMPLATE_SECTIONS = `## Goal
+[What the user is trying to accomplish]
+
+## Constraints & Preferences
+[User preferences, coding style, constraints, important decisions]
+
+## Progress
+### Done
+[Completed work — include specific file paths, commands run, results obtained]
+### In Progress
+[Work currently underway]
+### Blocked
+[Any blockers or issues encountered]
+
+## Key Decisions
+[Important technical decisions and why they were made]
+
+## Resolved Questions
+[Questions the user asked that were ALREADY answered — include the answer so the next assistant does not re-answer them]
+
+## Pending User Asks
+[Questions or requests from the user that have NOT yet been answered or fulfilled. If none, write "None."]
+
+## Relevant Files
+[Files read, modified, or created — with brief note on each]
+
+## Remaining Work
+[What remains to be done — framed as context, not instructions]
+
+## Critical Context
+[Any specific values, error messages, configuration details, or data that would be lost without explicit preservation]
+
+## Tools & Patterns
+[Which tools were used, how they were used effectively, and any tool-specific discoveries]
+
+Be specific — include file paths, command outputs, error messages, and concrete values rather than vague descriptions.
+
+Write only the summary body. Do not include any preamble or prefix.`;
+
+/** Build the prompt an LLM summarizer should see. Exported for testing + for
+ *  the default summarizer wiring in core.ts. */
+export function buildSummarizerPrompt(
+  droppedTurns: OllamaMessage[],
+  previousSummary?: string,
+  focusTopic?: string,
+): string {
+  const content = serializeForSummary(droppedTurns);
+  let prompt: string;
+  if (previousSummary) {
+    prompt = `${_SUMMARIZER_PREAMBLE}
+
+You are updating a context compaction summary. A previous compaction produced the summary below. New conversation turns have occurred since then and need to be incorporated.
+
+PREVIOUS SUMMARY:
+${previousSummary}
+
+NEW TURNS TO INCORPORATE:
+${content}
+
+Update the summary using this exact structure. PRESERVE all existing information that is still relevant. ADD new progress. Move items from "In Progress" to "Done" when completed. Move answered questions to "Resolved Questions". Remove information only if it is clearly obsolete.
+
+${_TEMPLATE_SECTIONS}`;
+  } else {
+    prompt = `${_SUMMARIZER_PREAMBLE}
+
+Create a structured handoff summary for a different assistant that will continue this conversation after earlier turns are compacted. The next assistant should be able to understand what happened without re-reading the original turns.
+
+TURNS TO SUMMARIZE:
+${content}
+
+Use this exact structure:
+
+${_TEMPLATE_SECTIONS}`;
+  }
+  if (focusTopic) {
+    prompt += `
+
+FOCUS TOPIC: "${focusTopic}"
+The user has requested that this compaction PRIORITISE preserving all information related to the focus topic above. For content related to "${focusTopic}", include full detail — exact values, file paths, command outputs, error messages, and decisions. For content NOT related to the focus topic, summarise more aggressively (brief one-liners or omit if truly irrelevant). The focus topic sections should receive roughly 60-70% of the summary token budget.`;
+  }
+  return prompt;
+}
+
+/** Build the compaction note content block. When `llmSummary` is provided,
+ *  it replaces the deterministic per-turn preview block as the "current"
+ *  section; prior summary + focus topic are still wrapped around it. */
+function buildSummaryBody(
+  dropped: OllamaMessage[],
+  previousSummary: string | undefined,
+  focusTopic: string | undefined,
+  llmSummary: string | null,
+): string {
+  const priorBlock = previousSummary ? `<prior-summary>\n${previousSummary.trim()}\n</prior-summary>\n\n` : '';
+  const focusLine = focusTopic ? `\n<focus-topic>${focusTopic}</focus-topic>\n` : '';
+  let currentBlock: string;
+  if (llmSummary && llmSummary.trim()) {
+    currentBlock = `<compacted-summary count="${dropped.length}">\n${llmSummary.trim()}\n</compacted-summary>`;
+  } else {
+    const previews = dropped.map(formatDroppedMessage).join('\n');
+    currentBlock = `<compacted-turns count="${dropped.length}">\n${previews}\n</compacted-turns>`;
+  }
+  return `${priorBlock}${focusLine}${currentBlock}`;
+}
+
+/** Async variant that invokes `opts.summarizer` (LLM) when provided. Falls
+ *  back to the deterministic preview block on summarizer failure and sets a
+ *  10-min cooldown so repeated compactions don't thrash a broken aux model. */
+export async function maybeCompactAsync(messages: OllamaMessage[], opts: CompactOptions = {}): Promise<CompactionResult> {
+  const envThreshold = parseInt(process.env.ARIA_COMPRESS_THRESHOLD ?? '', 10);
+  const threshold = opts.thresholdTokens ?? (Number.isFinite(envThreshold) && envThreshold > 0 ? envThreshold : DEFAULT_THRESHOLD);
+  const protectFirst = Math.max(1, opts.protectFirst ?? DEFAULT_PROTECT_FIRST);
+  const protectLast = Math.max(2, opts.protectLast ?? DEFAULT_PROTECT_LAST);
+
+  const beforeCount = messages.length;
+  const beforeTokens = estimateTotalTokens(messages);
+
+  if (beforeTokens < threshold || messages.length <= protectFirst + protectLast + 1) {
+    return {
+      messages,
+      before: { count: beforeCount, tokens: beforeTokens },
+      after: { count: beforeCount, tokens: beforeTokens },
+      compressed: false,
+    };
+  }
+
+  const head = messages.slice(0, protectFirst);
+  const tail = messages.slice(messages.length - protectLast);
+  const dropped = messages.slice(protectFirst, messages.length - protectLast);
+
+  // Try the LLM summarizer if provided and not in failure cooldown.
+  let llmSummary: string | null = null;
+  const now = Date.now();
+  const cooldownActive = now < _summaryFailureCooldownUntil;
+  if (opts.summarizer && !cooldownActive) {
+    try {
+      const out = await opts.summarizer(dropped, opts.previousSummary, opts.focusTopic);
+      if (out && out.trim().length > 0) {
+        llmSummary = out;
+      } else {
+        // Empty/null → treat as soft miss but don't cooldown (model legitimately
+        // decided there was nothing to summarize).
+      }
+    } catch (err) {
+      _summaryFailureCooldownUntil = now + SUMMARY_FAILURE_COOLDOWN_MS;
+      console.warn(`[aria] compressor: summarizer failed (${(err as Error).message}) — cooldown ${SUMMARY_FAILURE_COOLDOWN_MS / 1000}s`);
+    }
+  }
+
+  const summaryBody = buildSummaryBody(dropped, opts.previousSummary, opts.focusTopic, llmSummary);
+  const note: OllamaMessage = {
+    role: 'system',
+    content: `${SUMMARY_PREFIX}\n\n${summaryBody}`,
+  };
+  const combined = [...head, note, ...tail];
+  const sanitized = sanitizeToolPairs(combined);
+  const afterTokens = estimateTotalTokens(sanitized);
+
+  return {
+    messages: sanitized,
+    before: { count: beforeCount, tokens: beforeTokens },
+    after: { count: sanitized.length, tokens: afterTokens },
+    compressed: true,
+    summary: summaryBody,
+  };
 }
 
 export function maybeCompact(messages: OllamaMessage[], opts: CompactOptions = {}): CompactionResult {

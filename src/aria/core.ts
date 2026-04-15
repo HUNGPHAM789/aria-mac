@@ -5,13 +5,35 @@ import { executeTool, TOOLS } from './tools-executor.js';
 import { getRecentMessages, insertMessage as dbInsertMessage } from '../db/index.js';
 import { appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { maybeCompact, type OllamaMessage as CompactorMessage } from './context-compressor.js';
+import { maybeCompactAsync, buildSummarizerPrompt, type OllamaMessage as CompactorMessage, type SummarizerFn } from './context-compressor.js';
 
 // Per-thread rolling compaction summary. Each successful maybeCompact returns a
 // summary text; we stash it here keyed by threadId so the NEXT compaction on
 // the same thread can pass it as previousSummary, letting info survive across
 // repeated compactions instead of being lost each time the middle is dropped.
 const _threadCompactionSummaries = new Map<string, string>();
+
+// Default LLM summarizer — reuses ollamaChat with a one-shot prompt and no
+// tools. On ARIA_LLM=claude we still use Ollama here to avoid burning a Claude
+// turn on a side-channel summary (cheap + local is the right call for this).
+// Can be replaced by Track D's provider chain later.
+const defaultSummarizer: SummarizerFn = async (droppedTurns, previousSummary, focusTopic) => {
+  const prompt = buildSummarizerPrompt(
+    droppedTurns as OllamaMessage[],
+    previousSummary,
+    focusTopic,
+  );
+  const res = await ollamaChat(
+    [
+      { role: 'system', content: 'You are a summarization agent. Emit only the structured summary body.' },
+      { role: 'user', content: prompt },
+    ],
+    undefined,
+    OLLAMA_MODEL(),
+  );
+  const text = res.message.content?.trim();
+  return text && text.length > 0 ? text : null;
+};
 
 // ─── Tool Permission Rules ────────────────────────────────────────────────────
 
@@ -784,13 +806,18 @@ export async function runClaude(
       onStream?.({ type: 'segment_break' });
 
       // In-loop compression — fires when accumulated messages exceed threshold.
-      // Cheap, no LLM call; pure head/tail protection + tool-pair sanitize.
-      // Pass prior summary so info from earlier compactions on this thread survives.
+      // Async LLM summary (Phase C.2) with deterministic preview-block fallback
+      // on summarizer failure or cooldown. Pass prior summary so info from
+      // earlier compactions on this thread survives.
       const priorSummary = threadId ? _threadCompactionSummaries.get(threadId) : undefined;
-      const compaction = maybeCompact(messages as unknown as CompactorMessage[], { previousSummary: priorSummary });
+      const compaction = await maybeCompactAsync(messages as unknown as CompactorMessage[], {
+        previousSummary: priorSummary,
+        summarizer: defaultSummarizer,
+      });
       if (compaction.compressed) {
         console.log(`[aria] Context compacted at turn ${turn}: ${compaction.before.tokens}→${compaction.after.tokens} tokens (${compaction.before.count}→${compaction.after.count} msgs)`);
-        if (corr) log('context_compacted', corr, { thread: threadId, beforeTokens: compaction.before.tokens, afterTokens: compaction.after.tokens, beforeCount: compaction.before.count, afterCount: compaction.after.count });
+        const usedLlm = compaction.summary?.includes('<compacted-summary') ?? false;
+        if (corr) log('context_compacted', corr, { thread: threadId, beforeTokens: compaction.before.tokens, afterTokens: compaction.after.tokens, beforeCount: compaction.before.count, afterCount: compaction.after.count, llm: usedLlm });
         messages.length = 0;
         messages.push(...(compaction.messages as unknown as OllamaMessage[]));
         if (threadId && compaction.summary) _threadCompactionSummaries.set(threadId, compaction.summary);
