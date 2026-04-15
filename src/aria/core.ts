@@ -5,6 +5,7 @@ import { executeTool, TOOLS } from './tools-executor.js';
 import { getRecentMessages, insertMessage as dbInsertMessage } from '../db/index.js';
 import { appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { maybeCompact, type OllamaMessage as CompactorMessage } from './context-compressor.js';
 
 // ─── Tool Permission Rules ────────────────────────────────────────────────────
 
@@ -769,6 +770,16 @@ export async function runClaude(
           role: 'tool',
           content: modelContent,
         });
+      }
+
+      // In-loop compression — fires when accumulated messages exceed threshold.
+      // Cheap, no LLM call; pure head/tail protection + tool-pair sanitize.
+      const compaction = maybeCompact(messages as unknown as CompactorMessage[]);
+      if (compaction.compressed) {
+        console.log(`[aria] Context compacted at turn ${turn}: ${compaction.before.tokens}→${compaction.after.tokens} tokens (${compaction.before.count}→${compaction.after.count} msgs)`);
+        if (corr) log('context_compacted', corr, { thread: threadId, beforeTokens: compaction.before.tokens, afterTokens: compaction.after.tokens, beforeCount: compaction.before.count, afterCount: compaction.after.count });
+        messages.length = 0;
+        messages.push(...(compaction.messages as unknown as OllamaMessage[]));
       }
     }
 
