@@ -5,7 +5,8 @@ import { executeTool, TOOLS } from './tools-executor.js';
 import { getRecentMessages, insertMessage as dbInsertMessage } from '../db/index.js';
 import { appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { maybeCompactAsync, buildSummarizerPrompt, type OllamaMessage as CompactorMessage, type SummarizerFn } from './context-compressor.js';
+import { maybeCompactAsync, buildSummarizerPrompt, type OllamaMessage as CompactorMessage, type SummarizerFn, type PreCompressHook } from './context-compressor.js';
+import { memoryOnPreCompress } from './memory.js';
 
 // Per-thread rolling compaction summary. Each successful maybeCompact returns a
 // summary text; we stash it here keyed by threadId so the NEXT compaction on
@@ -30,11 +31,12 @@ export function requestCompaction(threadId: string, focusTopic?: string): void {
 // tools. On ARIA_LLM=claude we still use Ollama here to avoid burning a Claude
 // turn on a side-channel summary (cheap + local is the right call for this).
 // Can be replaced by Track D's provider chain later.
-const defaultSummarizer: SummarizerFn = async (droppedTurns, previousSummary, focusTopic) => {
+const defaultSummarizer: SummarizerFn = async (droppedTurns, previousSummary, focusTopic, memoryDigest) => {
   const prompt = buildSummarizerPrompt(
     droppedTurns as OllamaMessage[],
     previousSummary,
     focusTopic,
+    memoryDigest,
   );
   const res = await ollamaChat(
     [
@@ -828,6 +830,7 @@ export async function runClaude(
       const compaction = await maybeCompactAsync(messages as unknown as CompactorMessage[], {
         previousSummary: priorSummary,
         summarizer: defaultSummarizer,
+        preCompressHook: memoryOnPreCompress as PreCompressHook,
         focusTopic: pending?.focusTopic,
         ...(pending ? { thresholdTokens: 0 } : {}),
       });

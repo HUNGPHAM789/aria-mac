@@ -371,6 +371,90 @@ export async function loadHenryMemoryAsync(userMessage?: string, corr?: string):
   return wrapMemoryFence(sections.join('\n\n---\n\n'));
 }
 
+// ─── Pre-compress hook ───────────────────────────────────────────────────────
+//
+// Before the context compressor summarizes dropped turns, let the memory
+// system surface additional context so insights survive compaction. The
+// summarizer embeds the returned text as reference material alongside the
+// dropped turns. Port of Hermes context_compressor.py's `on_pre_compress`
+// memory-provider hook.
+//
+// Strategy: build a query from the tail of the dropped content + optional
+// focus topic, reuse the same vec/keyword search as loadHenryMemoryAsync,
+// and return a compact digest. Budget-capped so we don't blow the summarizer
+// prompt.
+
+const PRE_COMPRESS_MAX_CHARS = 4000;
+const PRE_COMPRESS_TOP_K = 5;
+
+interface CompactishMessage { role: string; content?: string }
+
+export async function memoryOnPreCompress(
+  droppedTurns: CompactishMessage[],
+  focusTopic?: string,
+): Promise<string> {
+  // Build a search query from the last few user/assistant messages (most
+  // recent signal about what the agent was working on) + the focus topic.
+  const tailText = droppedTurns
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-6)
+    .map(m => (m.content ?? '').slice(0, 600))
+    .join('\n');
+  const query = [focusTopic, tailText].filter(Boolean).join('\n').trim();
+  if (!query) return '';
+
+  let allFiles: MemoryFileRow[];
+  try {
+    allFiles = listMemoryFiles();
+  } catch {
+    return '';
+  }
+  if (allFiles.length === 0) return '';
+  const byId = new Map(allFiles.map(r => [r.id, r]));
+
+  let hits: MemoryFileRow[] = [];
+  if (isVecEnabled()) {
+    try {
+      const qEmb = await embedText(query);
+      if (qEmb) {
+        const vecHits = searchMemoryEmbeddings(qEmb, PRE_COMPRESS_TOP_K);
+        hits = vecHits
+          .map(h => byId.get(h.id))
+          .filter((r): r is MemoryFileRow => !!r && r.always_load !== 1);
+      }
+    } catch { /* fall through to keyword */ }
+  }
+  if (hits.length === 0) {
+    const qTokens = tokenize(query);
+    hits = allFiles
+      .filter(r => r.always_load !== 1)
+      .map(r => {
+        const nameTokens = tokenize(r.file_name.replace('.md', '').replace(/[-_]/g, ' '));
+        const score = nameTokens.filter(t => qTokens.some(m => m.includes(t) || t.includes(m))).length;
+        return { row: r, score };
+      })
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, PRE_COMPRESS_TOP_K)
+      .map(x => x.row);
+  }
+  if (hits.length === 0) return '';
+
+  // Build a compact digest — label + first ~400 chars of each hit, capped.
+  const sections: string[] = [];
+  let total = 0;
+  for (const row of hits) {
+    try {
+      const body = readFileSync(row.file_path, 'utf-8').slice(0, 400).replace(/\s+/g, ' ').trim();
+      const section = `- [${row.file_label}] ${body}…`;
+      if (total + section.length > PRE_COMPRESS_MAX_CHARS) break;
+      total += section.length;
+      sections.push(section);
+    } catch { /* skip */ }
+  }
+  return sections.join('\n');
+}
+
 export function loadHenryMemory(userMessage?: string): string {
   const allFiles = listMemoryFiles();
   if (allFiles.length === 0) {

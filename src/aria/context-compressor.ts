@@ -125,7 +125,17 @@ export type SummarizerFn = (
   droppedTurns: OllamaMessage[],
   previousSummary?: string,
   focusTopic?: string,
+  memoryDigest?: string,
 ) => Promise<string | null>;
+
+/** Pre-compress hook — called right before the summarizer, gets the dropped
+ *  turns + focus topic, returns a short digest (e.g. relevant memory files)
+ *  that will be embedded in the summarizer prompt as reference material.
+ *  Return empty string to contribute nothing. */
+export type PreCompressHook = (
+  droppedTurns: OllamaMessage[],
+  focusTopic?: string,
+) => Promise<string>;
 
 export interface CompactOptions {
   thresholdTokens?: number;
@@ -140,6 +150,9 @@ export interface CompactOptions {
   focusTopic?: string;
   /** LLM summarizer (Phase C.2). Only used by maybeCompactAsync. */
   summarizer?: SummarizerFn;
+  /** Memory-provider pre-compress hook (Phase C.5). Result embedded in the
+   *  summarizer prompt so memory insights survive compaction. */
+  preCompressHook?: PreCompressHook;
 }
 
 // Phase C.3 — module-level failure cooldown. After an LLM summarization
@@ -243,6 +256,7 @@ export function buildSummarizerPrompt(
   droppedTurns: OllamaMessage[],
   previousSummary?: string,
   focusTopic?: string,
+  memoryDigest?: string,
 ): string {
   const content = serializeForSummary(droppedTurns);
   let prompt: string;
@@ -277,6 +291,12 @@ ${_TEMPLATE_SECTIONS}`;
 
 FOCUS TOPIC: "${focusTopic}"
 The user has requested that this compaction PRIORITISE preserving all information related to the focus topic above. For content related to "${focusTopic}", include full detail — exact values, file paths, command outputs, error messages, and decisions. For content NOT related to the focus topic, summarise more aggressively (brief one-liners or omit if truly irrelevant). The focus topic sections should receive roughly 60-70% of the summary token budget.`;
+  }
+  if (memoryDigest && memoryDigest.trim()) {
+    prompt += `
+
+RELEVANT MEMORY (reference — these are saved memory-provider insights that may relate to the turns above; weave into the summary where applicable, do NOT invent connections):
+${memoryDigest.trim()}`;
   }
   return prompt;
 }
@@ -327,13 +347,25 @@ export async function maybeCompactAsync(messages: OllamaMessage[], opts: Compact
   const tail = messages.slice(messages.length - protectLast);
   const dropped = messages.slice(protectFirst, messages.length - protectLast);
 
+  // Phase C.5: pre-compress hook runs before the summarizer so its output
+  // can be embedded in the summarizer prompt. Hook failures are non-fatal;
+  // summarization still proceeds without the digest.
+  let memoryDigest = '';
+  if (opts.preCompressHook) {
+    try {
+      memoryDigest = (await opts.preCompressHook(dropped, opts.focusTopic)) ?? '';
+    } catch (err) {
+      console.warn(`[aria] compressor: preCompressHook failed (${(err as Error).message}) — proceeding without memory digest`);
+    }
+  }
+
   // Try the LLM summarizer if provided and not in failure cooldown.
   let llmSummary: string | null = null;
   const now = Date.now();
   const cooldownActive = now < _summaryFailureCooldownUntil;
   if (opts.summarizer && !cooldownActive) {
     try {
-      const out = await opts.summarizer(dropped, opts.previousSummary, opts.focusTopic);
+      const out = await opts.summarizer(dropped, opts.previousSummary, opts.focusTopic, memoryDigest || undefined);
       if (out && out.trim().length > 0) {
         llmSummary = out;
       } else {
