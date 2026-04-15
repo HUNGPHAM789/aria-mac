@@ -41,6 +41,10 @@ export interface CompactionResult {
   before: { count: number; tokens: number };
   after: { count: number; tokens: number };
   compressed: boolean;
+  /** Combined summary text (prior + this compaction). Persist per-thread and
+   *  pass back as opts.previousSummary on the next compaction so information
+   *  survives across repeated compactions. Populated only when compressed=true. */
+  summary?: string;
 }
 
 function estimateMessageTokens(m: OllamaMessage): number {
@@ -117,6 +121,14 @@ export interface CompactOptions {
   thresholdTokens?: number;
   protectFirst?: number;
   protectLast?: number;
+  /** Summary text returned by a previous maybeCompact call on this thread.
+   *  When provided, it is preserved inside the new compaction note so info
+   *  from earlier compactions survives. */
+  previousSummary?: string;
+  /** Optional focus topic — when the user runs /compact <topic>, weight the
+   *  preserved content toward this theme. Phase C.1 just stores it in the note
+   *  header; the LLM-summary phase (C.2) will use it to bias preservation. */
+  focusTopic?: string;
 }
 
 export function maybeCompact(messages: OllamaMessage[], opts: CompactOptions = {}): CompactionResult {
@@ -141,11 +153,18 @@ export function maybeCompact(messages: OllamaMessage[], opts: CompactOptions = {
   const tail = messages.slice(messages.length - protectLast);
   const dropped = messages.slice(protectFirst, messages.length - protectLast);
 
-  // Build a compaction note with per-turn previews.
+  // Build a compaction note with per-turn previews, prepending any prior summary
+  // so information from earlier compactions survives this round.
   const previews = dropped.map(formatDroppedMessage).join('\n');
+  const priorBlock = opts.previousSummary
+    ? `<prior-summary>\n${opts.previousSummary.trim()}\n</prior-summary>\n\n`
+    : '';
+  const focusLine = opts.focusTopic ? `\n<focus-topic>${opts.focusTopic}</focus-topic>\n` : '';
+  const currentBlock = `<compacted-turns count="${dropped.length}">\n${previews}\n</compacted-turns>`;
+  const summaryBody = `${priorBlock}${focusLine}${currentBlock}`;
   const note: OllamaMessage = {
     role: 'system',
-    content: `${SUMMARY_PREFIX}\n\n<compacted-turns count="${dropped.length}">\n${previews}\n</compacted-turns>`,
+    content: `${SUMMARY_PREFIX}\n\n${summaryBody}`,
   };
 
   const combined = [...head, note, ...tail];
@@ -157,5 +176,6 @@ export function maybeCompact(messages: OllamaMessage[], opts: CompactOptions = {
     before: { count: beforeCount, tokens: beforeTokens },
     after: { count: sanitized.length, tokens: afterTokens },
     compressed: true,
+    summary: summaryBody,
   };
 }

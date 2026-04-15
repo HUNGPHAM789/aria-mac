@@ -7,6 +7,12 @@ import { appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { maybeCompact, type OllamaMessage as CompactorMessage } from './context-compressor.js';
 
+// Per-thread rolling compaction summary. Each successful maybeCompact returns a
+// summary text; we stash it here keyed by threadId so the NEXT compaction on
+// the same thread can pass it as previousSummary, letting info survive across
+// repeated compactions instead of being lost each time the middle is dropped.
+const _threadCompactionSummaries = new Map<string, string>();
+
 // ─── Tool Permission Rules ────────────────────────────────────────────────────
 
 const SAFE_TOOLS = new Set([
@@ -779,12 +785,15 @@ export async function runClaude(
 
       // In-loop compression — fires when accumulated messages exceed threshold.
       // Cheap, no LLM call; pure head/tail protection + tool-pair sanitize.
-      const compaction = maybeCompact(messages as unknown as CompactorMessage[]);
+      // Pass prior summary so info from earlier compactions on this thread survives.
+      const priorSummary = threadId ? _threadCompactionSummaries.get(threadId) : undefined;
+      const compaction = maybeCompact(messages as unknown as CompactorMessage[], { previousSummary: priorSummary });
       if (compaction.compressed) {
         console.log(`[aria] Context compacted at turn ${turn}: ${compaction.before.tokens}→${compaction.after.tokens} tokens (${compaction.before.count}→${compaction.after.count} msgs)`);
         if (corr) log('context_compacted', corr, { thread: threadId, beforeTokens: compaction.before.tokens, afterTokens: compaction.after.tokens, beforeCount: compaction.before.count, afterCount: compaction.after.count });
         messages.length = 0;
         messages.push(...(compaction.messages as unknown as OllamaMessage[]));
+        if (threadId && compaction.summary) _threadCompactionSummaries.set(threadId, compaction.summary);
       }
     }
 
