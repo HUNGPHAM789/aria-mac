@@ -19,3 +19,11 @@ export {
   type CredentialEntry,
   type CredentialPoolOptions,
 } from './pool.js';
+export { resolveChain, makeChain, type ProviderBinding } from './chain.js';
+export {
+  runWithFallback,
+  ProviderChainExhaustedError,
+  type RunWithFallbackOptions,
+  type RunWithFallbackResult,
+  type ProviderAttempt,
+} from './orchestrator.js';

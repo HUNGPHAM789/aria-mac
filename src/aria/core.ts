@@ -27,10 +27,17 @@ export function requestCompaction(threadId: string, focusTopic?: string): void {
   _pendingCompaction.set(threadId, { focusTopic: focusTopic?.trim() || undefined });
 }
 
-// Default LLM summarizer — reuses ollamaChat with a one-shot prompt and no
-// tools. On ARIA_LLM=claude we still use Ollama here to avoid burning a Claude
-// turn on a side-channel summary (cheap + local is the right call for this).
-// Can be replaced by Track D's provider chain later.
+// Default LLM summarizer — routes through the D.4 retry orchestrator so a
+// rate-limited / unavailable provider rotates credentials or falls back to
+// the next provider in the chain (ARIA_PROVIDER_CHAIN). Chain construction
+// is lazy so tests + bench runs don't build pools they'll never use.
+import { resolveChain, runWithFallback, ProviderChainExhaustedError } from './providers/index.js';
+let _compactionChain: ReturnType<typeof resolveChain> | null = null;
+function compactionChain(): ReturnType<typeof resolveChain> {
+  if (!_compactionChain) _compactionChain = resolveChain();
+  return _compactionChain;
+}
+
 const defaultSummarizer: SummarizerFn = async (droppedTurns, previousSummary, focusTopic, memoryDigest) => {
   const prompt = buildSummarizerPrompt(
     droppedTurns as OllamaMessage[],
@@ -38,16 +45,30 @@ const defaultSummarizer: SummarizerFn = async (droppedTurns, previousSummary, fo
     focusTopic,
     memoryDigest,
   );
-  const res = await ollamaChat(
-    [
-      { role: 'system', content: 'You are a summarization agent. Emit only the structured summary body.' },
-      { role: 'user', content: prompt },
-    ],
-    undefined,
-    OLLAMA_MODEL(),
-  );
-  const text = res.message.content?.trim();
-  return text && text.length > 0 ? text : null;
+  const chain = compactionChain();
+  if (chain.length === 0) return null;
+  try {
+    const result = await runWithFallback(chain, {
+      label: 'compaction',
+      call: async (provider) => {
+        const res = await provider.chat(
+          [
+            { role: 'system', content: 'You are a summarization agent. Emit only the structured summary body.' },
+            { role: 'user', content: prompt },
+          ],
+          { maxOutputTokens: 4096 },
+        );
+        return res.message.content?.trim() ?? '';
+      },
+    });
+    return result.value && result.value.length > 0 ? result.value : null;
+  } catch (err) {
+    if (err instanceof ProviderChainExhaustedError) {
+      console.warn(`[aria] compaction summarizer chain exhausted (${err.attempts.length} attempts)`);
+      return null;
+    }
+    throw err;
+  }
 };
 
 // ─── Tool Permission Rules ────────────────────────────────────────────────────

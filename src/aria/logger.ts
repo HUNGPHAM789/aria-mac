@@ -58,6 +58,10 @@ export type LogEvent =
   | 'codebase_indexed'
   | 'project_switched'
   | 'recall_search'
+  | 'provider_attempted'
+  | 'provider_succeeded'
+  | 'provider_failed'
+  | 'provider_pool_exhausted'
   | 'error';
 
 export interface LogRecord {
