@@ -57,6 +57,28 @@ interface OllamaToolCall {
   function: OllamaToolFunction;
 }
 
+// Defense against truncated streaming tool calls (Hermes PR #6847 / commit 2d0d05a3):
+// when streaming is cut mid-call, function.arguments is invalid JSON. Previously the
+// handler silently substituted {} and executed the tool with empty args — unpredictable.
+// Now: return the parse failure so the caller can skip execution and surface a synthetic
+// tool_result explaining the truncation, letting the model retry or give up cleanly.
+type ParsedArgs =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; raw: string; error: string };
+
+function parseToolArgs(rawArgs: unknown): ParsedArgs {
+  if (typeof rawArgs !== 'string') {
+    return { ok: true, args: (rawArgs ?? {}) as Record<string, unknown> };
+  }
+  try {
+    const parsed = JSON.parse(rawArgs);
+    if (parsed && typeof parsed === 'object') return { ok: true, args: parsed as Record<string, unknown> };
+    return { ok: false, raw: rawArgs, error: 'parsed non-object' };
+  } catch (e) {
+    return { ok: false, raw: rawArgs, error: (e as Error).message };
+  }
+}
+
 interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
@@ -218,8 +240,9 @@ async function ollamaChatStream(
       }
     }
 
-    // Thinking mode fallback
-    if (!fullContent && fullThinking) {
+    // Thinking mode fallback — only when no tool_calls, otherwise truncated tool
+    // args might be masquerading as thinking exhaustion (Hermes PR #6847).
+    if (!fullContent && fullThinking && !toolCalls?.length) {
       console.log('[ollama-stream] Model produced thinking but no content — using thinking as content');
       fullContent = fullThinking;
       onChunk(fullThinking);
@@ -674,8 +697,16 @@ export async function runClaude(
 
       for (const toolCall of toolCalls) {
         const toolName = toolCall.function.name;
-        const rawArgs = toolCall.function.arguments ?? {};
-        const toolArgs = typeof rawArgs === 'string' ? (() => { try { return JSON.parse(rawArgs); } catch { return {}; } })() : rawArgs;
+        const parsed = parseToolArgs(toolCall.function.arguments);
+        if (!parsed.ok) {
+          const errMsg = `Tool call '${toolName}' had truncated/invalid JSON args (${parsed.error}). Execution skipped — restate the call with complete arguments.`;
+          if (corr) log('tool_call_truncated', corr, { thread: threadId, tool: toolName, rawLen: parsed.raw.length });
+          console.warn(`[aria] ${errMsg}`);
+          messages.push({ role: 'tool', content: `Error: ${errMsg}` });
+          onStream?.({ type: 'tool_result', toolName, output: `Error: truncated tool args — ${parsed.error}` });
+          continue;
+        }
+        const toolArgs = parsed.args;
 
         if (corr) log('tool_use', corr, { thread: threadId, tool: toolName });
         onStream?.({ type: 'tool_use', toolName, toolUseId: toolName });
@@ -785,8 +816,14 @@ export async function runClaude(
         });
         for (const tc of continuation.message.tool_calls) {
           const tName = tc.function.name;
-          const rawArgs = tc.function.arguments ?? {};
-          const tArgs = typeof rawArgs === 'string' ? (() => { try { return JSON.parse(rawArgs); } catch { return {}; } })() : rawArgs;
+          const parsed = parseToolArgs(tc.function.arguments);
+          if (!parsed.ok) {
+            const errMsg = `Tool call '${tName}' had truncated/invalid JSON args (${parsed.error}). Execution skipped.`;
+            if (corr) log('tool_call_truncated', corr, { thread: threadId, tool: tName, rawLen: parsed.raw.length });
+            messages.push({ role: 'tool', content: `Error: ${errMsg}` });
+            continue;
+          }
+          const tArgs = parsed.args;
           let res: string;
           try {
             res = extraToolMap.has(tName) ? await extraToolMap.get(tName)!(tArgs) : await executeTool(tName, tArgs);
