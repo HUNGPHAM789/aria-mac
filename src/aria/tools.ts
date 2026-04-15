@@ -68,13 +68,18 @@ export function buildAriaTools(ctx: AriaToolContext): AriaTool[] {
         required: ['skill_name', 'description', 'content'],
       },
       execute: async (args) => {
-        const filePath = createSkill({
-          skill_name: String(args.skill_name ?? ''),
-          description: String(args.description ?? ''),
-          content: String(args.content ?? ''),
-        });
-        if (ctx.onSkillCreated) await ctx.onSkillCreated(filePath, String(args.skill_name));
-        return `Skill created at ${filePath}`;
+        try {
+          const result = createSkill({
+            skill_name: String(args.skill_name ?? ''),
+            description: String(args.description ?? ''),
+            content: String(args.content ?? ''),
+          });
+          if (ctx.onSkillCreated) await ctx.onSkillCreated(result.filePath, result.name);
+          const note = result.scan.verdict === 'caution' ? ` Note: security scan flagged (${result.scan.summary}) — allowed but review.` : '';
+          return `Skill created at ${result.filePath}.${note}`;
+        } catch (err) {
+          return `REFUSED: create_skill failed — ${(err as Error).message}`;
+        }
       },
     },
     {
