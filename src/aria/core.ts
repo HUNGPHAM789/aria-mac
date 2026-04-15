@@ -27,6 +27,38 @@ export function requestCompaction(threadId: string, focusTopic?: string): void {
   _pendingCompaction.set(threadId, { focusTopic: focusTopic?.trim() || undefined });
 }
 
+/** Snapshot credential pool state for the /pool command. Reads from the
+ *  lazy-built compaction chain — the same chain the orchestrator uses —
+ *  so what you see is what will be tried next. */
+export interface PoolSnapshot {
+  provider: string;
+  total: number;
+  available: number;
+  exhausted: number;
+  exhaustedEntries: Array<{ credId: string; untilIso: string; remainingMs: number }>;
+}
+
+export function poolSnapshot(): PoolSnapshot[] {
+  const chain = compactionChain();
+  const now = Date.now();
+  return chain.map(b => {
+    const stats = b.pool.stats();
+    const entries: PoolSnapshot['exhaustedEntries'] = [];
+    for (const [credId, until] of b.pool._exhaustionSnapshot()) {
+      if (until > now) {
+        entries.push({ credId, untilIso: new Date(until).toISOString(), remainingMs: until - now });
+      }
+    }
+    return {
+      provider: b.id,
+      total: stats.total,
+      available: stats.available,
+      exhausted: stats.exhausted,
+      exhaustedEntries: entries,
+    };
+  });
+}
+
 // Default LLM summarizer — routes through the D.4 retry orchestrator so a
 // rate-limited / unavailable provider rotates credentials or falls back to
 // the next provider in the chain (ARIA_PROVIDER_CHAIN). Chain construction

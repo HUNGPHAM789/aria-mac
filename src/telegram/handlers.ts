@@ -1,5 +1,5 @@
 import { bot } from './bot.js';
-import { runClaude, buildSystemPrompt, stripActionBlocks, requestCompaction, type StreamEvent } from '../aria/core.js';
+import { runClaude, buildSystemPrompt, stripActionBlocks, requestCompaction, poolSnapshot, type StreamEvent } from '../aria/core.js';
 import { runTask, classifyTask } from '../aria/task-runner.js';
 import { loadIdentity, loadTraitsFromDb } from '../aria/identity.js';
 import { loadHenryMemoryAsync, loadAvailableSkills, detectSkillContext } from '../aria/memory.js';
@@ -158,6 +158,28 @@ bot.command('compact', async (ctx) => {
   requestCompaction(tid, focus || undefined);
   if (focus) await ctx.reply(`🧭 Compaction queued — next turn will summarize with focus: *${focus}*`, { parse_mode: 'Markdown' });
   else await ctx.reply('🧭 Compaction queued — next turn will summarize this thread.');
+});
+
+bot.command('pool', async (ctx) => {
+  try {
+    const pools = poolSnapshot();
+    if (pools.length === 0) {
+      await ctx.reply('🔌 No providers in the chain — set `ARIA_PROVIDER_CHAIN`.');
+      return;
+    }
+    const lines: string[] = ['🔌 *Provider pool state*'];
+    for (const p of pools) {
+      const icon = p.available > 0 ? '🟢' : '🔴';
+      lines.push(`${icon} *${p.provider}* — ${p.available}/${p.total} available${p.exhausted > 0 ? ` (${p.exhausted} exhausted)` : ''}`);
+      for (const e of p.exhaustedEntries) {
+        const mins = Math.ceil(e.remainingMs / 60_000);
+        lines.push(`    · \`${e.credId}\` — ${mins}m remaining`);
+      }
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply(`⚠️ /pool failed: ${(err as Error).message.slice(0, 200)}`);
+  }
 });
 
 bot.command('reindex', async (ctx) => {

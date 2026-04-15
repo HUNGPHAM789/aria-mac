@@ -215,6 +215,43 @@ async function main() {
       return;
     }
 
+    // ─── Dashboard: provider pool state + recent attempts ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/providers')) {
+      try {
+        const { poolSnapshot } = await import('../aria/core.js');
+        const { readFileSync: rfs, existsSync: exs } = await import('fs');
+        const { join: jn } = await import('path');
+        const url = new URL(req.url, 'http://localhost');
+        const hours = parseInt(url.searchParams.get('hours') ?? '24', 10);
+        const cutoff = Date.now() - hours * 3600_000;
+        // Aggregate provider_* events from today's JSONL.
+        const stats: Record<string, { attempts: number; succeeded: number; failed: number; byReason: Record<string, number> }> = {};
+        const date = new Date().toISOString().slice(0, 10);
+        const logPath = jn(process.cwd(), 'data', 'logs', `${date}.jsonl`);
+        if (exs(logPath)) {
+          for (const line of rfs(logPath, 'utf-8').trim().split('\n')) {
+            if (!line) continue;
+            try {
+              const r = JSON.parse(line) as { ts?: string; event?: string; provider?: string; reason?: string };
+              if (!r.event?.startsWith('provider_') || !r.provider) continue;
+              const ts = r.ts ? Date.parse(r.ts) : 0;
+              if (ts < cutoff) continue;
+              const s = stats[r.provider] ??= { attempts: 0, succeeded: 0, failed: 0, byReason: {} };
+              if (r.event === 'provider_attempted') s.attempts++;
+              if (r.event === 'provider_succeeded') s.succeeded++;
+              if (r.event === 'provider_failed') {
+                s.failed++;
+                if (r.reason) s.byReason[r.reason] = (s.byReason[r.reason] ?? 0) + 1;
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ pools: poolSnapshot(), stats, windowHours: hours }));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
     // ─── Dashboard: get tool log ──
     if (req.method === 'GET' && req.url?.startsWith('/api/tool-log')) {
       try {
