@@ -216,6 +216,18 @@ export async function runClaudeBackend({ message, systemPrompt, opts }: RunClaud
   const actions = extractActions(finalText);
   const visibleText = stripActionBlocks(finalText);
 
+  // Post-turn: fire background review. Fire-and-forget.
+  if (!ephemeral && threadId && corr) {
+    const { maybeScheduleReview } = await import('./background-review.js');
+    maybeScheduleReview({
+      threadId,
+      corr,
+      userMessage: message,
+      assistantText: visibleText,
+      toolsUsed: [], // SDK handles tool calls internally; we don't track per-turn list yet
+    });
+  }
+
   return {
     text: visibleText,
     sessionId,

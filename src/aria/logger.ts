@@ -38,6 +38,7 @@ export type LogEvent =
   | 'tool_use'
   | 'tool_result'
   | 'tool_call_truncated'
+  | 'background_review_done'
   | 'agent_spawned'
   | 'agent_spawn_rejected'
   | 'tool_permission'

@@ -898,6 +898,15 @@ export async function runClaude(
       appendFileSync(join(thinkDir, `${date}.md`), entry);
     } catch { /* non-critical */ }
 
+    // Post-turn: fire background review if interval reached. Fire-and-forget.
+    if (!ephemeral && threadId && corr) {
+      const toolsUsed = messages
+        .filter(m => m.role === 'assistant' && m.tool_calls?.length)
+        .flatMap(m => m.tool_calls!.map(tc => tc.function.name));
+      const { maybeScheduleReview } = await import('./background-review.js');
+      maybeScheduleReview({ threadId, corr, userMessage: message, assistantText: finalText, toolsUsed });
+    }
+
     return response;
   } catch (err) {
     if (corr) logError(corr, err, { thread: threadId, ms: Date.now() - startedAt });
