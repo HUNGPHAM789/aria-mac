@@ -563,6 +563,38 @@ async function handleAriaMessage(ctx: Context, userMessage: string): Promise<voi
           // We don't render results inline (too noisy) — they're in the JSONL log.
           break;
 
+        case 'segment_break': {
+          // Tool batch done — finalize the current Telegram message and reset
+          // state so the next text/tool_use creates a NEW message instead of
+          // editing the old one. Port of Hermes stream_consumer segment model.
+          const snapBuf = stripActionBlocks(streamBuffer).trim();
+          const snapRibbon = renderToolRibbon();
+          const snapMsgId = streamMsgId;
+          // Reset synchronously so later events start a fresh segment
+          streamBuffer = '';
+          toolEntries.length = 0;
+          toolEntryByUseId.clear();
+          streamMsgId = null;
+          lastSendTime = 0;
+          // Queue the final edit (no trailing ▍ cursor) against the captured msgId
+          if (snapMsgId && (snapBuf || snapRibbon)) {
+            const parts: string[] = [];
+            if (snapRibbon) parts.push(snapRibbon);
+            if (snapBuf) parts.push(snapBuf);
+            const finalText = parts.join('\n\n');
+            enqueue(async () => {
+              try {
+                await ctx.telegram.editMessageText(ctx.chat!.id, snapMsgId, undefined, finalText, { parse_mode: 'Markdown' });
+              } catch {
+                try {
+                  await ctx.telegram.editMessageText(ctx.chat!.id, snapMsgId, undefined, finalText.replace(/[`_*>]/g, ''));
+                } catch {}
+              }
+            });
+          }
+          break;
+        }
+
         case 'agent_started':
           if (event.agentType || event.summary) {
             const label = event.agentType ?? 'agent';

@@ -185,14 +185,18 @@ export async function runClaudeBackend({ message, systemPrompt, opts }: RunClaud
         // Echoes + tool results. Track last tool result so task-runner
         // can pass it between steps (matches Ollama loop behavior).
         const content = (msg.message.content ?? []) as Array<{ type: string; content?: unknown }>;
+        let sawToolResult = false;
         for (const b of content) {
           if (b.type === 'tool_result') {
+            sawToolResult = true;
             const text = typeof b.content === 'string' ? b.content
               : Array.isArray(b.content) ? (b.content as Array<{ text?: string }>).map(x => x.text ?? '').join('\n')
               : '';
             if (text) lastToolOutput = text;
           }
         }
+        // Tool batch finished — signal display layer to open a fresh segment.
+        if (sawToolResult) onStream?.({ type: 'segment_break' });
       }
     }
   } catch (err) {

@@ -521,7 +521,7 @@ export function stringifyToolResult(content: unknown): string {
 // ─── Streaming Event Types ───────────────────────────────────────────────────
 
 export interface StreamEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_use_complete' | 'tool_result' | 'session_id' | 'agent_progress' | 'agent_started' | 'agent_stopped';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_use_complete' | 'tool_result' | 'segment_break' | 'session_id' | 'agent_progress' | 'agent_started' | 'agent_stopped';
   text?: string;
   toolName?: string;
   toolUseId?: string;
@@ -772,6 +772,10 @@ export async function runClaude(
           content: modelContent,
         });
       }
+
+      // Segment break: tool batch done, tell display layer to start a fresh message
+      // for subsequent text/tool events (port of Hermes stream_consumer segment model).
+      onStream?.({ type: 'segment_break' });
 
       // In-loop compression — fires when accumulated messages exceed threshold.
       // Cheap, no LLM call; pure head/tail protection + tool-pair sanitize.
