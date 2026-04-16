@@ -862,7 +862,7 @@ const connDot = document.getElementById('conn-dot');
 
 function termLine(ts, color, label, detail) {
   const time = ts ? new Date(ts).toLocaleTimeString() : '';
-  return `<div style="margin-bottom:2px"><span style="color:#6b6f76">${time}</span> <span style="color:${color};font-weight:600">${label}</span>${detail ? ` <span style="color:#b0b0bc">${escapeHtml(detail).slice(0,200)}</span>` : ''}</div>`;
+  return `<div style="margin-bottom:2px"><span style="color:#6b6f76">${time}</span> <span style="color:${color};font-weight:600">${escapeHtml(label)}</span>${detail ? ` <span style="color:#b0b0bc">${escapeHtml(detail).slice(0,200)}</span>` : ''}</div>`;
 }
 
 function termLineRaw(ts, color, label, rawHtml) {

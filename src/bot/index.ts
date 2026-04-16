@@ -193,7 +193,7 @@ async function main() {
         `).all();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(rows));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -208,7 +208,7 @@ async function main() {
         const hits = searchMessagesFts(q, limit);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ query: q, count: hits.length, hits }));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -225,7 +225,7 @@ async function main() {
         `).all(sid);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(rows));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -237,7 +237,7 @@ async function main() {
         const report = getQualityReport(hours);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(report));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -274,7 +274,7 @@ async function main() {
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ pools: poolSnapshot(), stats, windowHours: hours }));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -290,7 +290,7 @@ async function main() {
         const events = lines.slice(-200).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(events));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -310,7 +310,7 @@ async function main() {
           node: process.version,
           pid: process.pid,
         }));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -346,7 +346,7 @@ async function main() {
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ days, byModel, byDay }));
-      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      } catch (err) { console.error('[ARIA] API error:', err); res.writeHead(500); res.end(JSON.stringify({ error: 'Internal error' })); }
       return;
     }
 
@@ -356,11 +356,13 @@ async function main() {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
       });
       res.write(`event: connected\ndata: {"ts":"${new Date().toISOString()}"}\n\n`);
       sseClients.add(res);
-      const keepalive = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { clearInterval(keepalive); } }, 15000);
+      const keepalive = setInterval(() => {
+        try { res.write(': keepalive\n\n'); }
+        catch { clearInterval(keepalive); sseClients.delete(res); }
+      }, 15000);
       req.on('close', () => { sseClients.delete(res); clearInterval(keepalive); });
       return;
     }
@@ -368,7 +370,7 @@ async function main() {
     // ─── Dashboard: send message as user (Claude ↔ ARIA live test) ──
     if (req.method === 'POST' && req.url === '/api/dashboard/send') {
       let body = '';
-      req.on('data', (c: Buffer) => body += c.toString());
+      req.on('data', (c: Buffer) => { body += c.toString(); if (body.length > 100_000) { res.writeHead(413); res.end('Payload too large'); req.destroy(); } });
       req.on('end', async () => {
         try {
           const { message } = JSON.parse(body);
@@ -418,9 +420,10 @@ async function main() {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ reply: stripActionBlocks(response.text), elapsed, taskType, corr }));
         } catch (err) {
-          broadcastSSE('task_error', { error: String(err), ts: new Date().toISOString() });
+          console.error('[ARIA] Dashboard send error:', err);
+          broadcastSSE('task_error', { error: 'Task failed', ts: new Date().toISOString() });
           res.writeHead(500);
-          res.end(JSON.stringify({ error: String(err) }));
+          res.end(JSON.stringify({ error: 'Task execution failed' }));
         }
       });
       return;
@@ -435,7 +438,7 @@ async function main() {
       }
 
       let body = '';
-      req.on('data', (c: Buffer) => body += c.toString());
+      req.on('data', (c: Buffer) => { body += c.toString(); if (body.length > 100_000) { res.writeHead(413); res.end('Payload too large'); req.destroy(); } });
       req.on('end', async () => {
         const startTime = Date.now();
         const corr = newCorrelationId();
@@ -485,7 +488,7 @@ async function main() {
           console.error(`[ARIA-API] ✗ Error after ${elapsed}s:`, err);
           logError(corr, err, { source: 'mc-http' });
           res.writeHead(500);
-          res.end(JSON.stringify({ error: String(err) }));
+          res.end(JSON.stringify({ error: 'Request failed' }));
         }
       });
     } else {
