@@ -28,7 +28,7 @@ import {
   setModel,
 } from '../db/index.js';
 import type { Context } from 'telegraf';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import https from 'https';
 import http from 'http';
@@ -457,7 +457,7 @@ async function downloadTelegramFile(fileId: string, ext: string): Promise<string
 
 // ─── Shared handler logic ─────────────────────────────────────────────────────
 
-async function handleAriaMessage(ctx: Context, userMessage: string): Promise<void> {
+async function handleAriaMessage(ctx: Context, userMessage: string, images?: string[]): Promise<void> {
   await ctx.sendChatAction('typing');
 
   const threadId = threadIdFor(ctx);
@@ -698,6 +698,7 @@ async function handleAriaMessage(ctx: Context, userMessage: string): Promise<voi
           extraTools,
           corr,
           threadId,
+          images,
         });
       }
     } finally {
@@ -768,11 +769,16 @@ bot.on('photo', async (ctx) => {
     const localPath = await downloadTelegramFile(largest.file_id, '.jpg');
     console.log(`[ARIA] Photo received → ${localPath}`);
 
-    const message = caption
-      ? `I'm sending you a photo. The image is saved at: ${localPath}\nPlease analyze this image using the Read tool to view it. My message: ${caption}`
-      : `I'm sending you a photo. The image is saved at: ${localPath}\nPlease analyze this image using the Read tool to view it. Describe what you see and ask if I need anything specific.`;
+    // Read as base64 for native multimodal (Ollama images field / Claude vision)
+    const imageBase64 = readFileSync(localPath).toString('base64');
 
-    await handleAriaMessage(ctx, message);
+    // Message includes both a note that the image is inline AND the file path
+    // as fallback for providers that use Read tool for images (Claude SDK).
+    const message = caption
+      ? `[Photo attached — visible inline. Also saved at ${localPath}] ${caption}`
+      : `[Photo attached — visible inline. Also saved at ${localPath}] Describe what you see and ask if I need anything specific.`;
+
+    await handleAriaMessage(ctx, message, [imageBase64]);
   } catch (err) {
     console.error('[ARIA] Photo handler error:', err);
     await ctx.reply('⚠️ Failed to process photo.');

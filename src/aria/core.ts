@@ -190,6 +190,8 @@ interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   tool_calls?: OllamaToolCall[];
+  /** Base64-encoded images (Ollama multimodal — gemma4, llava, etc.) */
+  images?: string[];
 }
 
 interface OllamaToolDef {
@@ -667,6 +669,9 @@ export interface RunClaudeOptions {
   maxTurns?: number;
   /** Skip DB persistence (for internal task runner calls that shouldn't pollute history) */
   ephemeral?: boolean;
+  /** Base64-encoded images to attach to the user message (native multimodal).
+   *  Ollama: sent in the `images` field. Claude SDK: sent as image content blocks. */
+  images?: string[];
 }
 
 import { resolveFallbackChain, resolveModel, type ResolvedModel } from './model-aliases.js';
@@ -792,7 +797,9 @@ async function runOllamaAgent(
   if (ambiguityNudge) messages.push({ role: 'system', content: ambiguityNudge });
   if (leadingNudge) messages.push({ role: 'system', content: leadingNudge });
 
-  messages.push({ role: 'user', content: message });
+  const userMsg: OllamaMessage = { role: 'user', content: message };
+  if (opts.images?.length) userMsg.images = opts.images;
+  messages.push(userMsg);
 
   if (!ephemeral) {
     try { dbInsertMessage(sessionId, 'user', message); } catch { /* ignore */ }
