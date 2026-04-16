@@ -125,7 +125,10 @@ async function embedWithOllama(text: string): Promise<Float32Array | null> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: OLLAMA_EMBED_MODEL(),
-        input: text.slice(0, 8000),
+        // nomic-embed-text context = 8192 tokens. Mixed content (code +
+        // markdown) tokenizes at ~2-3 chars/token, so 4000 chars is safe.
+        // Was 8000 which caused "input length exceeds context length" errors.
+        input: text.slice(0, 4000),
       }),
       signal: AbortSignal.timeout(30000),
     });

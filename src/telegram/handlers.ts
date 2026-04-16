@@ -812,6 +812,20 @@ bot.on('document', async (ctx) => {
 
 // ─── Voice Message Handler ────────────────────────────────────────────────────
 
+async function transcribeAudio(oggPath: string): Promise<string> {
+  const { execSync } = await import('child_process');
+  // Convert ogg → wav for Whisper compatibility
+  const wavPath = oggPath.replace(/\.ogg$/, '.wav');
+  execSync(`ffmpeg -y -i "${oggPath}" -ar 16000 -ac 1 "${wavPath}" 2>/dev/null`);
+  // Whisper base model — fast on M4 Max, handles Vietnamese + English
+  const txtPath = wavPath.replace(/\.wav$/, '');
+  execSync(`whisper "${wavPath}" --model base --output_format txt --output_dir /tmp --fp16 False 2>/dev/null`);
+  const { readFileSync } = await import('fs');
+  const baseName = wavPath.split('/').pop()!.replace('.wav', '');
+  const transcript = readFileSync(`/tmp/${baseName}.txt`, 'utf-8').trim();
+  return transcript;
+}
+
 bot.on('voice', async (ctx) => {
   if (isGroupChat(ctx) && !isMentioned(ctx)) return;
 
@@ -819,7 +833,15 @@ bot.on('voice', async (ctx) => {
     const localPath = await downloadTelegramFile(ctx.message.voice.file_id, '.ogg');
     console.log(`[ARIA] Voice message received → ${localPath}`);
 
-    const message = `I sent you a voice message. The audio file is saved at: ${localPath}\nPlease use a Bash command to transcribe it (e.g., using macOS say/afplay for playback, or whisper CLI if available). Then respond to what I said.`;
+    let message: string;
+    try {
+      const transcript = await transcribeAudio(localPath);
+      console.log(`[ARIA] Voice transcribed: "${transcript.slice(0, 100)}"`);
+      message = `[Voice message transcribed] ${transcript}`;
+    } catch (err) {
+      console.warn(`[ARIA] Whisper transcription failed: ${(err as Error).message}`);
+      message = `I sent you a voice message but transcription failed. Audio saved at: ${localPath}. Try using Bash to run: whisper "${localPath}" --model base`;
+    }
 
     await handleAriaMessage(ctx, message);
   } catch (err) {
