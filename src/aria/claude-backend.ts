@@ -22,6 +22,7 @@ import { log } from './logger.js';
 import { insertMessage as dbInsertMessage, getRecentMessages } from '../db/index.js';
 import { extractActions, stripActionBlocks, type ClaudeResponse, type RunClaudeOptions, type StreamEvent } from './core.js';
 import { detectAmbiguity, detectLeadingPrompt } from './ambiguity.js';
+import { loadMcpServers } from './mcp-discovery.js';
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
@@ -102,9 +103,17 @@ export async function runClaudeBackend({ message, systemPrompt, opts }: RunClaud
     );
   });
 
-  const mcpServers: Options['mcpServers'] = ariaTools.length
-    ? { 'aria-actions': createSdkMcpServer({ name: 'aria-actions', version: '1.0.0', tools: ariaTools }) }
-    : undefined;
+  // Merge ARIA action tools (in-process MCP) + external MCP servers from config.
+  const mcpServers: Record<string, unknown> = {};
+  if (ariaTools.length) {
+    mcpServers['aria-actions'] = createSdkMcpServer({ name: 'aria-actions', version: '1.0.0', tools: ariaTools });
+  }
+  // Load external MCP servers from ~/.aria/mcp-servers.json. Each entry is
+  // a stdio subprocess; the SDK launches it and speaks MCP protocol natively.
+  const externalServers = loadMcpServers();
+  for (const [name, cfg] of Object.entries(externalServers)) {
+    mcpServers[name] = cfg;
+  }
 
   // Build prompt. SDK supports string prompt or async iterable of user
   // messages for multi-turn; we send the full recent history as preamble
@@ -150,7 +159,7 @@ export async function runClaudeBackend({ message, systemPrompt, opts }: RunClaud
     options: {
       model,
       systemPrompt,
-      mcpServers,
+      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers as Options['mcpServers'] : undefined,
       allowedTools,
       cwd: process.cwd(),
       permissionMode: 'bypassPermissions',
