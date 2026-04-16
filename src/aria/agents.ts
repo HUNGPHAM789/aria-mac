@@ -90,6 +90,7 @@ export interface SpawnResult {
   taskId: string;
   description: string;
   agentType: string;
+  model?: string;
 }
 
 export interface SpawnCapError {
@@ -155,6 +156,7 @@ export function spawnAgent(
   prompt: string,
   agentType: string = 'general-purpose',
   corr?: string,
+  model?: string,
 ): SpawnResult | SpawnCapError {
   const running = getRunningTasks();
   if (running.length >= MAX_CONCURRENT_AGENTS) {
@@ -197,13 +199,14 @@ export function spawnAgent(
   const workspaceDir = getTaskWorkspace(taskId);
   const workspaceContext = `\n\nShared workspace for this task: ${workspaceDir}\nWrite output files here so other agents and ARIA can access them.`;
 
-  runAgentAsync(taskId, resolvedType, description, prompt + workspaceContext, abortController, corr)
+  runAgentAsync(taskId, resolvedType, description, prompt + workspaceContext, abortController, corr, model)
     .catch(err => {
       console.error(`[ARIA] Agent ${taskId.slice(0, 8)} async error:`, err);
     });
 
-  console.log(`[ARIA] Agent spawned (Ollama): ${taskId.slice(0, 8)} — [${resolvedType}] ${description}`);
-  return { taskId, description, agentType: resolvedType };
+  const modelLabel = model ? ` model=${model}` : '';
+  console.log(`[ARIA] Agent spawned: ${taskId.slice(0, 8)} — [${resolvedType}${modelLabel}] ${description}`);
+  return { taskId, description, agentType: resolvedType, model };
 }
 
 async function runAgentAsync(
@@ -213,6 +216,7 @@ async function runAgentAsync(
   prompt: string,
   abortController: AbortController,
   corr?: string,
+  model?: string,
 ): Promise<void> {
   const startedAt = Date.now();
 
@@ -239,6 +243,7 @@ async function runAgentAsync(
 
     const result = await runTask(prompt, {
       systemPrompt: agentSystemPrompt,
+      model,
       corr,
       threadId: `agent:${taskId}`,
     });

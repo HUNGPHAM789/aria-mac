@@ -186,6 +186,21 @@ async function main() {
       return;
     }
 
+    // ─── Dashboard: FTS5 search across all sessions ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/search')) {
+      try {
+        const url = new URL(req.url, 'http://localhost');
+        const q = url.searchParams.get('q') ?? '';
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 50);
+        if (!q.trim()) { res.writeHead(400); res.end(JSON.stringify({ error: 'q param required' })); return; }
+        const { searchMessagesFts } = await import('../db/index.js');
+        const hits = searchMessagesFts(q, limit);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ query: q, count: hits.length, hits }));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
     // ─── Dashboard: get messages for a session ──
     if (req.method === 'GET' && req.url?.startsWith('/api/messages')) {
       try {

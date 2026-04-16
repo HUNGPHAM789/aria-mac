@@ -317,6 +317,8 @@ aside.tools h2 {
 <div id="page-chat" class="page active">
   <aside class="sidebar">
     <h2>Sessions</h2>
+    <input type="text" id="session-search" placeholder="Search messages..." style="width:100%;background:#1c1c22;border:1px solid #2a2a30;border-radius:6px;padding:8px 10px;color:#e8e8ed;font-size:0.75rem;margin-bottom:10px;font-family:inherit" />
+    <div id="search-results" style="display:none;margin-bottom:12px"></div>
     <div id="sessions"></div>
   </aside>
 
@@ -824,6 +826,40 @@ setInterval(() => {
 }, 2000);
 setInterval(loadSessions, 5000);
 setInterval(loadQuality, 15000);
+
+// Session search (FTS5)
+let searchTimeout = null;
+document.getElementById('session-search').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  const q = e.target.value.trim();
+  const resultsEl = document.getElementById('search-results');
+  const sessionsEl = document.getElementById('sessions');
+  if (!q) { resultsEl.style.display = 'none'; sessionsEl.style.display = 'block'; return; }
+  searchTimeout = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=15`);
+      const data = await res.json();
+      if (data.hits && data.hits.length > 0) {
+        resultsEl.innerHTML = `<div style="font-size:0.65rem;color:#6b6f76;margin-bottom:6px">${data.count} result${data.count===1?'':'s'}</div>` +
+          data.hits.map(h => `
+            <div class="session-item" style="font-size:0.72rem;margin-bottom:3px;cursor:pointer" data-id="${h.sessionId}">
+              <div style="color:#ff8c5a;font-size:0.6rem">${h.role} · ${new Date(h.createdAt*1000).toLocaleString()}</div>
+              <div style="color:#b0b0bc">${h.snippet.replace(/\s+/g,' ').slice(0,120)}</div>
+            </div>
+          `).join('');
+        resultsEl.querySelectorAll('.session-item').forEach(el => {
+          el.onclick = () => { currentSession = el.dataset.id; loadSessions(); loadMessages(); };
+        });
+        resultsEl.style.display = 'block';
+        sessionsEl.style.display = 'none';
+      } else {
+        resultsEl.innerHTML = '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No results</div>';
+        resultsEl.style.display = 'block';
+        sessionsEl.style.display = 'none';
+      }
+    } catch (e) { console.error(e); }
+  }, 300);
+});
 </script>
 </body>
 </html>

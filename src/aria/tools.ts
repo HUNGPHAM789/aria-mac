@@ -41,6 +41,7 @@ export function buildAriaTools(ctx: AriaToolContext): AriaTool[] {
           description: { type: 'string', description: 'One-line summary of the task' },
           prompt: { type: 'string', description: 'Full task prompt for the agent' },
           agent_type: { type: 'string', description: `Agent type: ${agentTypeList}` },
+          model: { type: 'string', description: 'Model alias for this agent (e.g. sonnet, gemma, opus). Defaults to current model. Use sonnet for remote parallelism alongside local gemma agents.' },
         },
         required: ['description', 'prompt'],
       },
@@ -50,9 +51,11 @@ export function buildAriaTools(ctx: AriaToolContext): AriaTool[] {
           String(args.prompt ?? ''),
           String(args.agent_type ?? 'general-purpose'),
           ctx.corr,
+          args.model ? String(args.model) : undefined,
         );
         if ('error' in result) return `Cannot spawn agent — ${result.error}`;
-        return `Agent dispatched [${result.agentType}]. task_id=${result.taskId}. Boss will see progress on Telegram.`;
+        const modelNote = result.model ? ` model=${result.model}` : '';
+        return `Agent dispatched [${result.agentType}${modelNote}]. task_id=${result.taskId}. Boss will see progress on Telegram.`;
       },
     },
     {

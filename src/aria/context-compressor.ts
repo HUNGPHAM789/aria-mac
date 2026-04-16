@@ -311,13 +311,22 @@ ${memoryDigest.trim()}`;
 /** Build the compaction note content block. When `llmSummary` is provided,
  *  it replaces the deterministic per-turn preview block as the "current"
  *  section; prior summary + focus topic are still wrapped around it. */
+// Cap prior summary to prevent unbounded growth across repeated compactions.
+// Each compaction embeds the prior, so without a cap the summary inflates by
+// ~4K per compaction. 8K is enough for 2 prior compaction's worth of context.
+const MAX_PRIOR_SUMMARY_CHARS = 8000;
+
 function buildSummaryBody(
   dropped: OllamaMessage[],
   previousSummary: string | undefined,
   focusTopic: string | undefined,
   llmSummary: string | null,
 ): string {
-  const priorBlock = previousSummary ? `<prior-summary>\n${previousSummary.trim()}\n</prior-summary>\n\n` : '';
+  let trimmedPrior = previousSummary?.trim() ?? '';
+  if (trimmedPrior.length > MAX_PRIOR_SUMMARY_CHARS) {
+    trimmedPrior = trimmedPrior.slice(0, MAX_PRIOR_SUMMARY_CHARS) + '\n…[prior summary truncated]';
+  }
+  const priorBlock = trimmedPrior ? `<prior-summary>\n${trimmedPrior}\n</prior-summary>\n\n` : '';
   const focusLine = focusTopic ? `\n<focus-topic>${focusTopic}</focus-topic>\n` : '';
   let currentBlock: string;
   if (llmSummary && llmSummary.trim()) {
