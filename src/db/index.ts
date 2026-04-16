@@ -22,6 +22,7 @@ export function getDb(): Database.Database {
   const dbPath = process.env.DATABASE_PATH ?? './data/aria.db';
   _db = new Database(dbPath, { allowExtension: true } as Database.Options);
   _db.pragma('journal_mode = WAL');
+  _db.pragma('wal_autocheckpoint = 1000');
   _db.pragma('foreign_keys = ON');
 
   // Load sqlite-vec extension BEFORE running schema (so vec0 virtual tables work)

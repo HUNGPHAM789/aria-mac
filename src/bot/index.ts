@@ -23,6 +23,18 @@ import '../telegram/handlers.js';
 import type { ServerResponse } from 'http';
 const sseClients = new Set<ServerResponse>();
 
+// ─── Simple rate limiter for expensive endpoints ────────────────────────────
+const _rateBuckets = new Map<string, number[]>();
+function rateLimit(key: string, maxPerMin: number): boolean {
+  const now = Date.now();
+  const bucket = _rateBuckets.get(key) ?? [];
+  const recent = bucket.filter(t => now - t < 60_000);
+  if (recent.length >= maxPerMin) return false;
+  recent.push(now);
+  _rateBuckets.set(key, recent);
+  return true;
+}
+
 function broadcastSSE(event: string, data: unknown) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
@@ -165,9 +177,10 @@ async function main() {
   // ─── HTTP API for MC Group Chat ──────────────────────────────────────────────
   const API_PORT = parseInt(process.env.ARIA_API_PORT ?? '3100', 10);
   const httpServer = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    const allowedOrigin = process.env.ARIA_CORS_ORIGIN ?? 'http://127.0.0.1:3100';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Aria-Secret');
 
     if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
@@ -201,7 +214,7 @@ async function main() {
     if (req.method === 'GET' && req.url?.startsWith('/api/search')) {
       try {
         const url = new URL(req.url, 'http://localhost');
-        const q = url.searchParams.get('q') ?? '';
+        const q = (url.searchParams.get('q') ?? '').slice(0, 500);
         const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 50);
         if (!q.trim()) { res.writeHead(400); res.end(JSON.stringify({ error: 'q param required' })); return; }
         const { searchMessagesFts } = await import('../db/index.js');
@@ -254,7 +267,9 @@ async function main() {
         const stats: Record<string, { attempts: number; succeeded: number; failed: number; byReason: Record<string, number> }> = {};
         const date = new Date().toISOString().slice(0, 10);
         const logPath = jn(process.cwd(), 'data', 'logs', `${date}.jsonl`);
-        if (exs(logPath)) {
+        const { statSync } = await import('fs');
+        const MAX_LOG_BYTES = 50 * 1024 * 1024; // 50MB cap
+        if (exs(logPath) && statSync(logPath).size < MAX_LOG_BYTES) {
           for (const line of rfs(logPath, 'utf-8').trim().split('\n')) {
             if (!line) continue;
             try {
@@ -286,6 +301,8 @@ async function main() {
         const date = new Date().toISOString().slice(0, 10);
         const logPath = jn(process.cwd(), 'data', 'logs', `${date}.jsonl`);
         if (!exs(logPath)) { res.writeHead(200); res.end('[]'); return; }
+        const { statSync: ss } = await import('fs');
+        if (ss(logPath).size > 50 * 1024 * 1024) { res.writeHead(200); res.end('[]'); return; } // skip if >50MB
         const lines = rfs(logPath, 'utf-8').trim().split('\n');
         const events = lines.slice(-200).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -369,6 +386,7 @@ async function main() {
 
     // ─── Dashboard: send message as user (Claude ↔ ARIA live test) ──
     if (req.method === 'POST' && req.url === '/api/dashboard/send') {
+      if (!rateLimit('dashboard_send', 10)) { res.writeHead(429); res.end(JSON.stringify({ error: 'Rate limited — max 10 requests/min' })); return; }
       let body = '';
       req.on('data', (c: Buffer) => { body += c.toString(); if (body.length > 100_000) { res.writeHead(413); res.end('Payload too large'); req.destroy(); } });
       req.on('end', async () => {
@@ -430,6 +448,7 @@ async function main() {
     }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
+      if (!rateLimit('api_chat', 20)) { res.writeHead(429); res.end(JSON.stringify({ error: 'Rate limited' })); return; }
       const secret = process.env.ARIA_API_SECRET;
       if (secret && req.headers['x-aria-secret'] !== secret) {
         res.writeHead(401);

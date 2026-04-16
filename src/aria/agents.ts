@@ -82,6 +82,8 @@ interface ActiveAgent {
   agentType: string;
   description: string;
   startedAt: number;
+  /** Guards against double-cleanup when cancel and completion race. */
+  state: 'running' | 'done';
 }
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -113,7 +115,8 @@ export function getActiveAgentInfo(): Array<{ taskId: string; agentType: string;
 
 export function cancelAgent(taskId: string): boolean {
   const entry = activeAgents.get(taskId);
-  if (!entry) return false;
+  if (!entry || entry.state !== 'running') return false;
+  entry.state = 'done';
   clearTimeout(entry.timeout);
   entry.abortController.abort();
   dbCancelAgent(taskId);
@@ -179,6 +182,9 @@ export function spawnAgent(
   const abortController = new AbortController();
 
   const timeout = setTimeout(() => {
+    const entry = activeAgents.get(taskId);
+    if (!entry || entry.state !== 'running') return;
+    entry.state = 'done';
     console.warn(`[ARIA] Agent ${taskId.slice(0, 8)} timed out after 1 hour, aborting...`);
     abortController.abort();
     failAgentTask(taskId, 'Agent timed out after 1 hour');
@@ -192,6 +198,7 @@ export function spawnAgent(
     agentType: resolvedType,
     description,
     startedAt: Date.now(),
+    state: 'running',
   });
 
   emitProgress({ taskId, agentType: resolvedType, description, type: 'started' });
@@ -249,7 +256,8 @@ async function runAgentAsync(
     });
 
     clearInterval(progressInterval);
-    clearTimeout(activeAgents.get(taskId)?.timeout);
+    const entry = activeAgents.get(taskId);
+    if (entry) { entry.state = 'done'; clearTimeout(entry.timeout); }
     activeAgents.delete(taskId);
 
     const resultText = result.text || '(Agent completed with no output)';
@@ -264,7 +272,8 @@ async function runAgentAsync(
     console.log(`[ARIA] Agent completed (Ollama): ${taskId.slice(0, 8)} — ${((Date.now() - startedAt) / 1000).toFixed(0)}s`);
 
   } catch (err) {
-    clearTimeout(activeAgents.get(taskId)?.timeout);
+    const errEntry = activeAgents.get(taskId);
+    if (errEntry) { errEntry.state = 'done'; clearTimeout(errEntry.timeout); }
     activeAgents.delete(taskId);
 
     const errMsg = err instanceof Error ? err.message : String(err);
