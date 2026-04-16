@@ -21,6 +21,7 @@ import { z, type ZodRawShape, type ZodTypeAny } from 'zod';
 import { log } from './logger.js';
 import { insertMessage as dbInsertMessage, getRecentMessages } from '../db/index.js';
 import { extractActions, stripActionBlocks, type ClaudeResponse, type RunClaudeOptions, type StreamEvent } from './core.js';
+import { detectAmbiguity, detectLeadingPrompt } from './ambiguity.js';
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
@@ -128,7 +129,12 @@ export async function runClaudeBackend({ message, systemPrompt, opts }: RunClaud
     } catch { /* first turn */ }
   }
 
-  const prompt = `${preamble}${message}`;
+  const ambiguityNudge = detectAmbiguity(message);
+  const leadingNudge = detectLeadingPrompt(message);
+  const nudges = [ambiguityNudge, leadingNudge].filter(Boolean);
+  const prompt = nudges.length > 0
+    ? `${preamble}${nudges.map(n => `[System: ${n}]`).join('\n')}\n\n${message}`
+    : `${preamble}${message}`;
 
   if (!ephemeral) {
     try { dbInsertMessage(sessionId, 'user', message); } catch { /* ignore */ }

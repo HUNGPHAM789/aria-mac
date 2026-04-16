@@ -301,7 +301,9 @@ async function main() {
           const systemPrompt = buildSystemPrompt(identityMd, traits, henryMemory + skillContext, availableSkills);
           const extraTools = buildAriaTools({ corr, threadId });
           const { runTask, classifyTask } = await import('../aria/task-runner.js');
-          const taskType = classifyTask(message);
+          const { detectAmbiguity, detectLeadingPrompt } = await import('../aria/ambiguity.js');
+          const isAmbiguous = detectAmbiguity(message) !== null || detectLeadingPrompt(message) !== null;
+          const taskType = isAmbiguous ? 'chat' : classifyTask(message);
           const startTime = Date.now();
           let response;
           if (taskType !== 'chat') {

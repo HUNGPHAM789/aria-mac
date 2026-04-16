@@ -7,6 +7,7 @@ import { appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { maybeCompactAsync, buildSummarizerPrompt, type OllamaMessage as CompactorMessage, type SummarizerFn, type PreCompressHook } from './context-compressor.js';
 import { memoryOnPreCompress } from './memory.js';
+import { detectAmbiguity, detectLeadingPrompt } from './ambiguity.js';
 
 // Per-thread rolling compaction summary. Each successful maybeCompact returns a
 // summary text; we stash it here keyed by threadId so the NEXT compaction on
@@ -783,6 +784,13 @@ async function runOllamaAgent(
       }
     } catch { /* first message, no history */ }
   }
+
+  // Ambiguity + leading-prompt detectors: inject nudge before the user
+  // message so the model sees it in temporal proximity to the vague/false ask.
+  const ambiguityNudge = detectAmbiguity(message);
+  const leadingNudge = detectLeadingPrompt(message);
+  if (ambiguityNudge) messages.push({ role: 'system', content: ambiguityNudge });
+  if (leadingNudge) messages.push({ role: 'system', content: leadingNudge });
 
   messages.push({ role: 'user', content: message });
 

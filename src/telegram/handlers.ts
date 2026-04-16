@@ -1,6 +1,7 @@
 import { bot } from './bot.js';
 import { runClaude, buildSystemPrompt, stripActionBlocks, requestCompaction, poolSnapshot, type StreamEvent } from '../aria/core.js';
 import { runTask, classifyTask } from '../aria/task-runner.js';
+import { detectAmbiguity, detectLeadingPrompt } from '../aria/ambiguity.js';
 import { loadIdentity, loadTraitsFromDb } from '../aria/identity.js';
 import { loadHenryMemoryAsync, loadAvailableSkills, detectSkillContext } from '../aria/memory.js';
 import { cancelAgent, getActiveAgentIds, getActiveAgentInfo, AGENT_TYPES, setAgentProgressHandler, type AgentProgressEvent } from '../aria/agents.js';
@@ -677,7 +678,8 @@ async function handleAriaMessage(ctx: Context, userMessage: string): Promise<voi
     try {
       const currentModel = getModel();
       const bossId = ctx.from?.id;
-      const taskType = classifyTask(userMessage);
+      const isAmbiguous = detectAmbiguity(userMessage) !== null || detectLeadingPrompt(userMessage) !== null;
+      const taskType = isAmbiguous ? 'chat' : classifyTask(userMessage);
       if (taskType !== 'chat') {
         console.log(`[ARIA] Task detected (${taskType}) — using task runner`);
         response = await runTask(userMessage, {
