@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>JarvisM4 Dashboard</title>
+<title>ARIA Dashboard</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -39,7 +39,7 @@ nav.top-nav .nav-tab.active { color: #ff8c5a; border-bottom-color: #ff6b35; }
   display: none; overflow: hidden;
 }
 #page-chat.active {
-  display: grid; grid-template-columns: 240px 1fr 380px;
+  display: grid; grid-template-columns: 240px 1fr 440px;
 }
 
 /* ── Full-width pages ── */
@@ -107,7 +107,7 @@ header.chat-header h1 { font-size: 1rem; font-weight: 600; color: #ff8c5a; }
 .input-bar button:hover { background: #ff8c5a; }
 .input-bar button:disabled { background: #6b6f76; cursor: not-allowed; }
 
-/* ── Right panel (tools/quality) ── */
+/* ── Right panel (terminal/quality) ── */
 aside.tools {
   background: #16161a; border-left: 1px solid #2a2a30;
   padding: 16px; overflow-y: auto;
@@ -295,6 +295,27 @@ aside.tools h2 {
 .usage-table tr:hover td { background: #16161a; }
 .usage-table .num { text-align: right; font-family: 'SF Mono', Menlo, monospace; font-weight: 600; }
 
+/* ── Terminal pre blocks ── */
+.term-pre {
+  background: #111118; border-radius: 4px; padding: 4px 8px; margin-top: 3px;
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.68rem;
+  line-height: 1.5; color: #b0b0bc; white-space: pre-wrap; word-break: break-all;
+  max-height: 80px; overflow-y: auto;
+}
+
+/* ── Connection indicator ── */
+.conn-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: middle;
+}
+.conn-dot.connected { background: #58cc02; }
+.conn-dot.disconnected { background: #ef4444; }
+
+/* ── Search highlight from FTS5 ── */
+#search-results mark {
+  background: rgba(255,107,53,0.3); color: #ff8c5a; border-radius: 2px; padding: 0 2px;
+}
+
 /* ── Scrollbar styling ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -324,7 +345,7 @@ aside.tools h2 {
 
   <main class="chat">
     <header class="chat-header">
-      <h1>JarvisM4 Dashboard</h1>
+      <h1>ARIA Dashboard</h1>
       <span class="status" id="status">Live</span>
     </header>
 
@@ -340,12 +361,12 @@ aside.tools h2 {
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <button class="tab-btn active" data-tab="terminal" onclick="switchTab('terminal')">Terminal</button>
       <button class="tab-btn" data-tab="quality" onclick="switchTab('quality')">Quality</button>
-      <button class="tab-btn" data-tab="tools" onclick="switchTab('tools')">Tool Log</button>
     </div>
     <div id="terminal-tab">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <h2 style="font-size:0.7rem;text-transform:uppercase;color:#6b6f76;letter-spacing:1.5px">Live Execution</h2>
-        <button onclick="document.getElementById('terminal-output').innerHTML=''" style="background:none;border:1px solid #2a2a30;color:#6b6f76;font-size:0.6rem;padding:2px 8px;border-radius:4px;cursor:pointer">Clear</button>
+      <div style="display:flex;align-items:center;margin-bottom:8px;gap:8px">
+        <span class="conn-dot connected" id="conn-dot"></span>
+        <h2 style="font-size:0.7rem;text-transform:uppercase;color:#6b6f76;letter-spacing:1.5px;margin:0;flex:1">Live Execution</h2>
+        <button onclick="document.getElementById('terminal-output').innerHTML='';toolUseCount=0" style="background:none;border:1px solid #2a2a30;color:#6b6f76;font-size:0.55rem;padding:1px 6px;border-radius:3px;cursor:pointer">Clear</button>
       </div>
       <div id="terminal-output" style="font-family:'SF Mono',Menlo,monospace;font-size:0.7rem;line-height:1.6;max-height:calc(100vh - 120px);overflow-y:auto;color:#b0b0bc"></div>
     </div>
@@ -355,10 +376,6 @@ aside.tools h2 {
       <div id="top-issues"></div>
       <h2 style="margin-top:16px">Recent Bad Responses</h2>
       <div id="recent-bad"></div>
-    </div>
-    <div id="tools-tab" style="display:none">
-      <h2>Tool Log (live)</h2>
-      <div id="tools"></div>
     </div>
   </aside>
 </div>
@@ -422,6 +439,7 @@ let currentPage = 'chat';
 let logsData = [];
 let statusInterval = null;
 let logsInterval = null;
+let toolUseCount = 0;
 
 /* ── Helpers ── */
 function escapeHtml(s) {
@@ -435,8 +453,8 @@ function fmtTokens(n) {
   return String(n);
 }
 
-function fmtUptime(ms) {
-  const s = Math.floor(ms / 1000);
+function fmtUptime(sec) {
+  const s = Math.floor(sec);
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -445,10 +463,6 @@ function fmtUptime(ms) {
   if (h > 0) parts.push(h + 'h');
   parts.push(m + 'm');
   return parts.join(' ');
-}
-
-function fmtMB(bytes) {
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 function evtClass(evt) {
@@ -543,33 +557,8 @@ async function loadMessages() {
     const headerEl = document.querySelector('header.chat-header h1');
     if (headerEl) {
       if (isLiveTest) headerEl.innerHTML = 'Claude <> ARIA <span style="color:#58cc02;font-size:0.8em">LIVE</span>';
-      else headerEl.innerHTML = 'JarvisM4 Dashboard';
+      else headerEl.innerHTML = 'ARIA Dashboard';
     }
-  } catch (e) { console.error(e); }
-}
-
-/* ── Right-panel tool log ── */
-async function loadTools() {
-  try {
-    const res = await fetch('/api/tool-log');
-    const events = await res.json();
-    const container = document.getElementById('tools');
-    container.innerHTML = events.slice(-50).reverse().map(e => {
-      const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
-      const event = e.event || 'event';
-      const data = e.data || {};
-      let detail = '';
-      if (data.tool) detail = `${data.tool}`;
-      else if (data.msgLen !== undefined) detail = `msg: ${data.msgLen} chars`;
-      else if (data.textLen !== undefined) detail = `out: ${data.textLen} chars - ${data.ms}ms`;
-      else detail = JSON.stringify(data).slice(0, 80);
-      return `
-        <div class="tool-event ${event}">
-          <span class="ts">${ts}</span> <span class="event-type">${event}</span>
-          ${detail ? `<div class="event-data">${escapeHtml(detail)}</div>` : ''}
-        </div>
-      `;
-    }).join('');
   } catch (e) { console.error(e); }
 }
 
@@ -606,7 +595,6 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('terminal-tab').style.display = tab === 'terminal' ? 'block' : 'none';
   document.getElementById('quality-tab').style.display = tab === 'quality' ? 'block' : 'none';
-  document.getElementById('tools-tab').style.display = tab === 'tools' ? 'block' : 'none';
 }
 
 /* ── Send message ── */
@@ -625,7 +613,7 @@ async function sendMessage() {
 
   const container = document.getElementById('messages');
   container.innerHTML += `<div class="msg user">${escapeHtml(msg).replace(/\n/g, '<br>')}<div class="msg-meta">user - just now</div></div>`;
-  container.innerHTML += `<div class="thinking-indicator" id="thinking">JarvisM4 is thinking</div>`;
+  container.innerHTML += `<div class="thinking-indicator" id="thinking">ARIA is thinking</div>`;
   container.scrollTop = container.scrollHeight;
 
   try {
@@ -691,11 +679,11 @@ async function loadStatus() {
         </div>
         <div class="stat-card">
           <div class="label">RSS Memory</div>
-          <div class="value">${s.memory ? fmtMB(s.memory.rss) : '?'}</div>
+          <div class="value">${s.memory ? s.memory.rss + ' MB' : '?'}</div>
         </div>
         <div class="stat-card">
           <div class="label">Heap Used</div>
-          <div class="value">${s.memory ? fmtMB(s.memory.heap) : '?'}</div>
+          <div class="value">${s.memory ? s.memory.heap + ' MB' : '?'}</div>
         </div>
       </div>
       <h2 style="font-size:0.7rem;text-transform:uppercase;color:#6b6f76;letter-spacing:1.5px;margin-bottom:14px">Provider Pools</h2>
@@ -825,10 +813,8 @@ async function loadUsage() {
 
 /* ── Initial load + polling ── */
 loadSessions();
-loadTools();
 loadQuality();
 
-setInterval(loadTools, 3000);
 setInterval(() => {
   if (!currentSession) return;
   loadMessages();
@@ -851,8 +837,8 @@ document.getElementById('session-search').addEventListener('input', (e) => {
       if (data.hits && data.hits.length > 0) {
         resultsEl.innerHTML = `<div style="font-size:0.65rem;color:#6b6f76;margin-bottom:6px">${data.count} result${data.count===1?'':'s'}</div>` +
           data.hits.map(h => `
-            <div class="session-item" style="font-size:0.72rem;margin-bottom:3px;cursor:pointer" data-id="${h.sessionId}">
-              <div style="color:#ff8c5a;font-size:0.6rem">${h.role} · ${new Date(h.createdAt*1000).toLocaleString()}</div>
+            <div class="session-item" style="font-size:0.72rem;margin-bottom:3px;cursor:pointer" data-id="${escapeHtml(h.sessionId)}">
+              <div style="color:#ff8c5a;font-size:0.6rem">${escapeHtml(h.role)} · ${new Date(h.createdAt*1000).toLocaleString()}</div>
               <div style="color:#b0b0bc">${h.snippet.replace(/\s+/g,' ').slice(0,120)}</div>
             </div>
           `).join('');
@@ -872,34 +858,60 @@ document.getElementById('session-search').addEventListener('input', (e) => {
 
 // ── Live Terminal via SSE ──
 const termEl = document.getElementById('terminal-output');
-const termColors = {
-  tool_use: '#58cc02', tool_result: '#b0b0bc', tool_use_complete: '#6b6f76',
-  text: '#e8e8ed', thinking: '#6b6f76', segment_break: '#2a2a30',
-  task_start: '#1cb0f6', task_end: '#58cc02', task_error: '#ef4444',
-};
+const connDot = document.getElementById('conn-dot');
 
 function termLine(ts, color, label, detail) {
   const time = ts ? new Date(ts).toLocaleTimeString() : '';
   return `<div style="margin-bottom:2px"><span style="color:#6b6f76">${time}</span> <span style="color:${color};font-weight:600">${label}</span>${detail ? ` <span style="color:#b0b0bc">${escapeHtml(detail).slice(0,200)}</span>` : ''}</div>`;
 }
 
+function termLineRaw(ts, color, label, rawHtml) {
+  const time = ts ? new Date(ts).toLocaleTimeString() : '';
+  return `<div style="margin-bottom:2px"><span style="color:#6b6f76">${time}</span> <span style="color:${color};font-weight:600">${label}</span>${rawHtml ? ' ' + rawHtml : ''}</div>`;
+}
+
 function initSSE() {
   const es = new EventSource('/api/dashboard/events');
+
+  es.onopen = () => {
+    connDot.classList.remove('disconnected');
+    connDot.classList.add('connected');
+  };
+
   es.addEventListener('stream', (e) => {
     const d = JSON.parse(e.data);
     let line = '';
     switch (d.type) {
-      case 'tool_use':
-        line = termLine(d.ts, '#58cc02', `▶ ${d.toolName || 'tool'}`, d.inputPreview || '');
+      case 'tool_use': {
+        toolUseCount++;
+        if (d.toolName === 'Bash' && d.input && d.input.command) {
+          const cmdSnip = escapeHtml(d.input.command.slice(0, 160));
+          line = termLineRaw(d.ts, '#58cc02', `▶ Bash (${toolUseCount}):`, `<span style="color:#b0b0bc">${cmdSnip}</span>`);
+        } else {
+          const preview = d.inputPreview ? escapeHtml(d.inputPreview).slice(0, 150) : '';
+          line = termLine(d.ts, '#58cc02', `▶ ${d.toolName || 'tool'} (${toolUseCount})`, preview);
+        }
         break;
+      }
       case 'tool_use_complete':
         line = termLine(d.ts, '#6b6f76', `  ${d.toolName}`, d.inputPreview || '');
         break;
-      case 'tool_result':
-        const outSnip = (d.output || '').replace(/\n/g, ' ').slice(0, 150);
-        const isErr = d.isError || (d.output && d.output.startsWith('Error'));
-        line = termLine(d.ts, isErr ? '#ef4444' : '#b0b0bc', '  ━━━', outSnip);
+      case 'tool_result': {
+        const output = d.output || '';
+        const isErr = d.isError || output.startsWith('Error');
+        const elapsedStr = d.ms != null ? ` [${d.ms}ms]` : '';
+        const lines = output.split('\n').filter(l => l.trim());
+        if (lines.length > 1) {
+          const shown = lines.slice(0, 3).map(l => escapeHtml(l)).join('\n');
+          const moreIndicator = lines.length > 3 ? `\n... (${lines.length - 3} more lines)` : '';
+          line = termLineRaw(d.ts, isErr ? '#ef4444' : '#b0b0bc', `  ━━━${elapsedStr}`, '') +
+            `<div class="term-pre">${shown}${moreIndicator}</div>`;
+        } else {
+          const outSnip = output.replace(/\n/g, ' ').slice(0, 150);
+          line = termLine(d.ts, isErr ? '#ef4444' : '#b0b0bc', `  ━━━${elapsedStr}`, outSnip);
+        }
         break;
+      }
       case 'text':
         if (d.text && d.text.trim()) line = termLine(d.ts, '#e8e8ed', '💬', d.text.slice(0, 100));
         break;
@@ -917,6 +929,9 @@ function initSSE() {
   });
   es.addEventListener('task_start', (e) => {
     const d = JSON.parse(e.data);
+    toolUseCount = 0;
+    // Remove thinking indicator from chat panel when task actually starts
+    document.getElementById('thinking')?.remove();
     termEl.innerHTML += termLine(d.ts, '#1cb0f6', `▸ Task [${d.taskType}]`, d.message);
     termEl.scrollTop = termEl.scrollHeight;
   });
@@ -931,7 +946,12 @@ function initSSE() {
     termEl.innerHTML += termLine(d.ts, '#ef4444', '✗ Error', d.error);
     termEl.scrollTop = termEl.scrollHeight;
   });
-  es.onerror = () => { setTimeout(initSSE, 3000); es.close(); };
+  es.onerror = () => {
+    connDot.classList.remove('connected');
+    connDot.classList.add('disconnected');
+    setTimeout(initSSE, 3000);
+    es.close();
+  };
 }
 initSSE();
 </script>
