@@ -338,10 +338,18 @@ aside.tools h2 {
 
   <aside class="tools">
     <div style="display:flex;gap:8px;margin-bottom:12px">
-      <button class="tab-btn active" data-tab="quality" onclick="switchTab('quality')">Quality</button>
+      <button class="tab-btn active" data-tab="terminal" onclick="switchTab('terminal')">Terminal</button>
+      <button class="tab-btn" data-tab="quality" onclick="switchTab('quality')">Quality</button>
       <button class="tab-btn" data-tab="tools" onclick="switchTab('tools')">Tool Log</button>
     </div>
-    <div id="quality-tab">
+    <div id="terminal-tab">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h2 style="font-size:0.7rem;text-transform:uppercase;color:#6b6f76;letter-spacing:1.5px">Live Execution</h2>
+        <button onclick="document.getElementById('terminal-output').innerHTML=''" style="background:none;border:1px solid #2a2a30;color:#6b6f76;font-size:0.6rem;padding:2px 8px;border-radius:4px;cursor:pointer">Clear</button>
+      </div>
+      <div id="terminal-output" style="font-family:'SF Mono',Menlo,monospace;font-size:0.7rem;line-height:1.6;max-height:calc(100vh - 120px);overflow-y:auto;color:#b0b0bc"></div>
+    </div>
+    <div id="quality-tab" style="display:none">
       <div class="quality-summary" id="quality-summary"></div>
       <h2 style="margin-top:16px">Top Issues (24h)</h2>
       <div id="top-issues"></div>
@@ -596,6 +604,7 @@ async function loadQuality() {
 
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.getElementById('terminal-tab').style.display = tab === 'terminal' ? 'block' : 'none';
   document.getElementById('quality-tab').style.display = tab === 'quality' ? 'block' : 'none';
   document.getElementById('tools-tab').style.display = tab === 'tools' ? 'block' : 'none';
 }
@@ -860,6 +869,71 @@ document.getElementById('session-search').addEventListener('input', (e) => {
     } catch (e) { console.error(e); }
   }, 300);
 });
+
+// ── Live Terminal via SSE ──
+const termEl = document.getElementById('terminal-output');
+const termColors = {
+  tool_use: '#58cc02', tool_result: '#b0b0bc', tool_use_complete: '#6b6f76',
+  text: '#e8e8ed', thinking: '#6b6f76', segment_break: '#2a2a30',
+  task_start: '#1cb0f6', task_end: '#58cc02', task_error: '#ef4444',
+};
+
+function termLine(ts, color, label, detail) {
+  const time = ts ? new Date(ts).toLocaleTimeString() : '';
+  return `<div style="margin-bottom:2px"><span style="color:#6b6f76">${time}</span> <span style="color:${color};font-weight:600">${label}</span>${detail ? ` <span style="color:#b0b0bc">${escapeHtml(detail).slice(0,200)}</span>` : ''}</div>`;
+}
+
+function initSSE() {
+  const es = new EventSource('/api/dashboard/events');
+  es.addEventListener('stream', (e) => {
+    const d = JSON.parse(e.data);
+    let line = '';
+    switch (d.type) {
+      case 'tool_use':
+        line = termLine(d.ts, '#58cc02', `▶ ${d.toolName || 'tool'}`, d.inputPreview || '');
+        break;
+      case 'tool_use_complete':
+        line = termLine(d.ts, '#6b6f76', `  ${d.toolName}`, d.inputPreview || '');
+        break;
+      case 'tool_result':
+        const outSnip = (d.output || '').replace(/\n/g, ' ').slice(0, 150);
+        const isErr = d.isError || (d.output && d.output.startsWith('Error'));
+        line = termLine(d.ts, isErr ? '#ef4444' : '#b0b0bc', '  ━━━', outSnip);
+        break;
+      case 'text':
+        if (d.text && d.text.trim()) line = termLine(d.ts, '#e8e8ed', '💬', d.text.slice(0, 100));
+        break;
+      case 'segment_break':
+        line = '<div style="border-top:1px solid #2a2a30;margin:6px 0"></div>';
+        break;
+      case 'agent_started':
+        line = termLine(d.ts, '#1cb0f6', `🤖 Agent [${d.agentType||'?'}]`, d.summary || 'starting...');
+        break;
+      case 'agent_stopped':
+        line = termLine(d.ts, '#58cc02', `✅ Agent done`, d.summary || '');
+        break;
+    }
+    if (line) { termEl.innerHTML += line; termEl.scrollTop = termEl.scrollHeight; }
+  });
+  es.addEventListener('task_start', (e) => {
+    const d = JSON.parse(e.data);
+    termEl.innerHTML += termLine(d.ts, '#1cb0f6', `▸ Task [${d.taskType}]`, d.message);
+    termEl.scrollTop = termEl.scrollHeight;
+  });
+  es.addEventListener('task_end', (e) => {
+    const d = JSON.parse(e.data);
+    termEl.innerHTML += termLine(d.ts, '#58cc02', `✓ Done`, `${d.elapsed}s · ${d.replyLen} chars`);
+    termEl.innerHTML += '<div style="border-top:1px solid #2a2a30;margin:6px 0"></div>';
+    termEl.scrollTop = termEl.scrollHeight;
+  });
+  es.addEventListener('task_error', (e) => {
+    const d = JSON.parse(e.data);
+    termEl.innerHTML += termLine(d.ts, '#ef4444', '✗ Error', d.error);
+    termEl.scrollTop = termEl.scrollHeight;
+  });
+  es.onerror = () => { setTimeout(initSSE, 3000); es.close(); };
+}
+initSSE();
 </script>
 </body>
 </html>

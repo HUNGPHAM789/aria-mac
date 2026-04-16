@@ -9,7 +9,7 @@ import { startQualityJudge, getQualityReport } from '../aria/quality-judge.js';
 import { startNotificationPoller, startHeartbeatPoller, setAgentProgressHandler } from '../aria/agents.js';
 import { seedDefaultProjects, indexAllCodebases, startFileWatchers, stopFileWatchers } from '../aria/codebase.js';
 import { startScheduler } from '../aria/scheduler.js';
-import { runClaude, buildSystemPrompt, stripActionBlocks } from '../aria/core.js';
+import { runClaude, buildSystemPrompt, stripActionBlocks, type StreamEvent } from '../aria/core.js';
 import { loadIdentity, loadTraitsFromDb } from '../aria/identity.js';
 import { loadHenryMemoryAsync, loadAvailableSkills, indexAllMemoryFiles } from '../aria/memory.js';
 import { buildAriaTools } from '../aria/tools.js';
@@ -18,6 +18,17 @@ import { getThreadSessionId, saveThreadSessionId, insertMessage, getModel } from
 
 // Register all Telegram handlers (side-effect import)
 import '../telegram/handlers.js';
+
+// ─── SSE subscriber management for live dashboard terminal ──────────────────
+import type { ServerResponse } from 'http';
+const sseClients = new Set<ServerResponse>();
+
+function broadcastSSE(event: string, data: unknown) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch { sseClients.delete(client); }
+  }
+}
 
 async function main() {
   console.log('[ARIA] Starting up...');
@@ -339,6 +350,21 @@ async function main() {
       return;
     }
 
+    // ─── Dashboard: SSE stream for live terminal ──
+    if (req.method === 'GET' && req.url === '/api/dashboard/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.write(`event: connected\ndata: {"ts":"${new Date().toISOString()}"}\n\n`);
+      sseClients.add(res);
+      const keepalive = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { clearInterval(keepalive); } }, 15000);
+      req.on('close', () => { sseClients.delete(res); clearInterval(keepalive); });
+      return;
+    }
+
     // ─── Dashboard: send message as user (Claude ↔ ARIA live test) ──
     if (req.method === 'POST' && req.url === '/api/dashboard/send') {
       let body = '';
@@ -376,16 +402,23 @@ async function main() {
           const isAmbiguous = detectAmbiguity(message) !== null || detectLeadingPrompt(message) !== null;
           const taskType = isAmbiguous ? 'chat' : classifyTask(message);
           const startTime = Date.now();
+          // Stream events to SSE subscribers for live terminal view
+          const onStream = (event: StreamEvent) => {
+            broadcastSSE('stream', { ...(event as any), corr, ts: new Date().toISOString() });
+          };
+          broadcastSSE('task_start', { corr, message: message.slice(0, 200), taskType, ts: new Date().toISOString() });
           let response;
           if (taskType !== 'chat') {
-            response = await runTask(message, { systemPrompt, model: getModel(), extraTools, corr, threadId });
+            response = await runTask(message, { systemPrompt, model: getModel(), extraTools, corr, threadId, onStream });
           } else {
-            response = await runClaude(message, systemPrompt, { model: getModel(), extraTools, corr, threadId });
+            response = await runClaude(message, systemPrompt, { model: getModel(), extraTools, corr, threadId, onStream });
           }
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          broadcastSSE('task_end', { corr, elapsed, taskType, replyLen: response.text.length, ts: new Date().toISOString() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ reply: stripActionBlocks(response.text), elapsed, taskType, corr }));
         } catch (err) {
+          broadcastSSE('task_error', { error: String(err), ts: new Date().toISOString() });
           res.writeHead(500);
           res.end(JSON.stringify({ error: String(err) }));
         }
