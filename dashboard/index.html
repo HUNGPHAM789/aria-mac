@@ -9,9 +9,45 @@ body {
   font-family: -apple-system, system-ui, sans-serif;
   background: #0a0a0b; color: #e8e8ed;
   height: 100vh; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+
+/* ── Top Nav ── */
+nav.top-nav {
+  background: #12121a; border-bottom: 1px solid #2a2a30;
+  display: flex; align-items: center; gap: 0; padding: 0 16px;
+  height: 44px; flex-shrink: 0;
+}
+nav.top-nav .brand {
+  font-size: 0.85rem; font-weight: 700; color: #ff8c5a; margin-right: 24px;
+  white-space: nowrap;
+}
+nav.top-nav .nav-tab {
+  background: none; border: none; color: #6b6f76; font-family: inherit;
+  font-size: 0.8rem; font-weight: 600; padding: 12px 16px; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+nav.top-nav .nav-tab:hover { color: #b0b0bc; }
+nav.top-nav .nav-tab.active { color: #ff8c5a; border-bottom-color: #ff6b35; }
+
+/* ── Page containers ── */
+.page { display: none; flex: 1; overflow: hidden; }
+.page.active { display: flex; }
+
+/* ── Chat page: 3-column layout ── */
+#page-chat {
+  display: none; overflow: hidden;
+}
+#page-chat.active {
   display: grid; grid-template-columns: 240px 1fr 380px;
 }
 
+/* ── Full-width pages ── */
+#page-status, #page-logs, #page-usage {
+  flex-direction: column; overflow-y: auto; padding: 24px 32px;
+}
+
+/* ── Sidebar ── */
 aside.sidebar {
   background: #16161a; border-right: 1px solid #2a2a30;
   padding: 16px; overflow-y: auto;
@@ -32,8 +68,9 @@ aside.sidebar h2 {
 .session-meta { font-size: 0.65rem; color: #6b6f76; margin-top: 2px; }
 .badge { background: #58cc02; color: #0a0a0b; font-size: 0.55rem; padding: 1px 5px; border-radius: 3px; font-weight: 700; margin-left: 4px; vertical-align: middle; }
 
+/* ── Chat main ── */
 main.chat {
-  display: flex; flex-direction: column; height: 100vh;
+  display: flex; flex-direction: column; height: calc(100vh - 44px);
 }
 header.chat-header {
   padding: 14px 24px; border-bottom: 1px solid #2a2a30;
@@ -70,6 +107,7 @@ header.chat-header h1 { font-size: 1rem; font-weight: 600; color: #ff8c5a; }
 .input-bar button:hover { background: #ff8c5a; }
 .input-bar button:disabled { background: #6b6f76; cursor: not-allowed; }
 
+/* ── Right panel (tools/quality) ── */
 aside.tools {
   background: #16161a; border-left: 1px solid #2a2a30;
   padding: 16px; overflow-y: auto;
@@ -137,56 +175,309 @@ aside.tools h2 {
   40% { content: '..'; }
   60%, 100% { content: '...'; }
 }
+
+/* ── Status Page ── */
+.status-hero {
+  font-size: 2.4rem; font-weight: 700; color: #ff8c5a; margin-bottom: 8px;
+}
+.status-sub {
+  font-size: 0.85rem; color: #6b6f76; margin-bottom: 24px;
+}
+.status-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px; margin-bottom: 32px;
+}
+.stat-card {
+  background: #16161a; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 18px 20px;
+}
+.stat-card .label { font-size: 0.7rem; text-transform: uppercase; color: #6b6f76; letter-spacing: 1px; margin-bottom: 6px; }
+.stat-card .value { font-size: 1.6rem; font-weight: 700; color: #e8e8ed; }
+.stat-card .value.green { color: #58cc02; }
+.stat-card .value.orange { color: #ff8c5a; }
+.stat-card .value.red { color: #ef4444; }
+
+.pool-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+.pool-card {
+  background: #16161a; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 18px 20px;
+}
+.pool-card .provider { font-size: 1rem; font-weight: 600; color: #e8e8ed; margin-bottom: 10px; }
+.pool-card .pool-row { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 3px 0; }
+.pool-card .pool-row .pool-label { color: #6b6f76; }
+.pool-card .pool-row .pool-val { color: #b0b0bc; font-weight: 600; }
+.pool-indicator {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+}
+.pool-indicator.ok { background: #58cc02; }
+.pool-indicator.warn { background: #fcd34d; }
+.pool-indicator.bad { background: #ef4444; }
+
+/* ── Logs Page ── */
+.logs-controls {
+  display: flex; gap: 10px; margin-bottom: 16px; align-items: center;
+}
+.logs-controls select, .logs-controls input {
+  background: #1c1c22; border: 1px solid #2a2a30; border-radius: 8px;
+  color: #e8e8ed; padding: 8px 12px; font-size: 0.8rem; font-family: inherit;
+}
+.logs-controls input { flex: 1; max-width: 300px; }
+.logs-controls select:focus, .logs-controls input:focus { outline: none; border-color: #ff6b35; }
+
+.log-table {
+  width: 100%; border-collapse: collapse; font-size: 0.75rem;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+.log-table th {
+  text-align: left; padding: 8px 10px; color: #6b6f76; font-size: 0.65rem;
+  text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #2a2a30;
+  position: sticky; top: 0; background: #0a0a0b; z-index: 1;
+}
+.log-table td {
+  padding: 6px 10px; border-bottom: 1px solid #1c1c22; vertical-align: top;
+}
+.log-table tr:hover td { background: #16161a; }
+.log-table .evt-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-weight: 600; font-size: 0.68rem;
+}
+.evt-badge.tool_use { background: rgba(88,204,2,0.15); color: #58cc02; }
+.evt-badge.error { background: rgba(239,68,68,0.15); color: #ef4444; }
+.evt-badge.request_in { background: rgba(28,176,246,0.15); color: #1cb0f6; }
+.evt-badge.response_out { background: rgba(255,107,53,0.15); color: #ff8c5a; }
+.evt-badge.llm_call { background: rgba(168,85,247,0.15); color: #a855f7; }
+.evt-badge.default { background: rgba(107,111,118,0.15); color: #6b6f76; }
+.log-detail { color: #b0b0bc; max-width: 500px; word-break: break-all; }
+
+/* ── Usage Page ── */
+.usage-controls {
+  display: flex; gap: 10px; margin-bottom: 20px; align-items: center;
+}
+.usage-controls label { font-size: 0.8rem; color: #6b6f76; }
+.usage-controls select {
+  background: #1c1c22; border: 1px solid #2a2a30; border-radius: 8px;
+  color: #e8e8ed; padding: 8px 12px; font-size: 0.8rem; font-family: inherit;
+}
+.usage-controls select:focus { outline: none; border-color: #ff6b35; }
+
+.usage-section-title {
+  font-size: 0.7rem; text-transform: uppercase; color: #6b6f76;
+  letter-spacing: 1.5px; margin-bottom: 12px; margin-top: 24px;
+}
+.usage-section-title:first-of-type { margin-top: 0; }
+
+.model-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px; margin-bottom: 24px;
+}
+.model-card {
+  background: #16161a; border: 1px solid #2a2a30; border-radius: 10px;
+  padding: 18px 20px;
+}
+.model-card .model-name { font-size: 1rem; font-weight: 600; color: #ff8c5a; margin-bottom: 12px; }
+.model-card .model-stat { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.8rem; }
+.model-card .model-stat .ml { color: #6b6f76; }
+.model-card .model-stat .mv { color: #e8e8ed; font-weight: 600; }
+
+.usage-table {
+  width: 100%; border-collapse: collapse; font-size: 0.8rem; max-width: 800px;
+}
+.usage-table th {
+  text-align: left; padding: 10px 14px; color: #6b6f76; font-size: 0.65rem;
+  text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #2a2a30;
+}
+.usage-table td {
+  padding: 10px 14px; border-bottom: 1px solid #1c1c22;
+}
+.usage-table tr:hover td { background: #16161a; }
+.usage-table .num { text-align: right; font-family: 'SF Mono', Menlo, monospace; font-weight: 600; }
+
+/* ── Scrollbar styling ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a40; }
 </style>
 </head>
 <body>
 
-<aside class="sidebar">
-  <h2>Sessions</h2>
-  <div id="sessions"></div>
-</aside>
+<!-- Top Navigation -->
+<nav class="top-nav">
+  <span class="brand">ARIA</span>
+  <button class="nav-tab active" data-page="chat" onclick="switchPage('chat')">Chat</button>
+  <button class="nav-tab" data-page="status" onclick="switchPage('status')">Status</button>
+  <button class="nav-tab" data-page="logs" onclick="switchPage('logs')">Logs</button>
+  <button class="nav-tab" data-page="usage" onclick="switchPage('usage')">Usage</button>
+</nav>
 
-<main class="chat">
-  <header class="chat-header">
-    <h1>⚡ JarvisM4 Dashboard</h1>
-    <span class="status" id="status">●  Live</span>
-  </header>
+<!-- Chat Page (3-column) -->
+<div id="page-chat" class="page active">
+  <aside class="sidebar">
+    <h2>Sessions</h2>
+    <div id="sessions"></div>
+  </aside>
 
-  <div class="messages" id="messages"></div>
+  <main class="chat">
+    <header class="chat-header">
+      <h1>JarvisM4 Dashboard</h1>
+      <span class="status" id="status">Live</span>
+    </header>
 
-  <div class="input-bar">
-    <input type="text" id="input" placeholder="Test as user — type a message..." autofocus>
-    <button id="send">Send</button>
-  </div>
-</main>
+    <div class="messages" id="messages"></div>
 
-<aside class="tools">
-  <div style="display:flex;gap:8px;margin-bottom:12px">
-    <button class="tab-btn active" data-tab="quality" onclick="switchTab('quality')">📊 Quality</button>
-    <button class="tab-btn" data-tab="tools" onclick="switchTab('tools')">🔧 Tool Log</button>
+    <div class="input-bar">
+      <input type="text" id="input" placeholder="Test as user -- type a message..." autofocus>
+      <button id="send">Send</button>
+    </div>
+  </main>
+
+  <aside class="tools">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="tab-btn active" data-tab="quality" onclick="switchTab('quality')">Quality</button>
+      <button class="tab-btn" data-tab="tools" onclick="switchTab('tools')">Tool Log</button>
+    </div>
+    <div id="quality-tab">
+      <div class="quality-summary" id="quality-summary"></div>
+      <h2 style="margin-top:16px">Top Issues (24h)</h2>
+      <div id="top-issues"></div>
+      <h2 style="margin-top:16px">Recent Bad Responses</h2>
+      <div id="recent-bad"></div>
+    </div>
+    <div id="tools-tab" style="display:none">
+      <h2>Tool Log (live)</h2>
+      <div id="tools"></div>
+    </div>
+  </aside>
+</div>
+
+<!-- Status Page -->
+<div id="page-status" class="page">
+  <div id="status-content">
+    <div style="color:#6b6f76;font-size:0.85rem">Loading status...</div>
   </div>
-  <div id="quality-tab">
-    <div class="quality-summary" id="quality-summary"></div>
-    <h2 style="margin-top:16px">Top Issues (24h)</h2>
-    <div id="top-issues"></div>
-    <h2 style="margin-top:16px">Recent Bad Responses</h2>
-    <div id="recent-bad"></div>
+</div>
+
+<!-- Logs Page -->
+<div id="page-logs" class="page">
+  <div class="logs-controls">
+    <select id="logs-filter">
+      <option value="">All events</option>
+      <option value="request_in">request_in</option>
+      <option value="response_out">response_out</option>
+      <option value="tool_use">tool_use</option>
+      <option value="llm_call">llm_call</option>
+      <option value="error">error</option>
+    </select>
+    <input type="text" id="logs-search" placeholder="Search by corr, tool, model...">
   </div>
-  <div id="tools-tab" style="display:none">
-    <h2>Tool Log (live)</h2>
-    <div id="tools"></div>
+  <div style="flex:1;overflow-y:auto">
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Event</th>
+          <th>Corr</th>
+          <th>Thread</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="logs-body"></tbody>
+    </table>
   </div>
-</aside>
+</div>
+
+<!-- Usage Page -->
+<div id="page-usage" class="page">
+  <div class="usage-controls">
+    <label>Period:</label>
+    <select id="usage-days" onchange="loadUsage()">
+      <option value="1">Last 1 day</option>
+      <option value="3">Last 3 days</option>
+      <option value="7" selected>Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+    </select>
+  </div>
+  <div id="usage-content">
+    <div style="color:#6b6f76;font-size:0.85rem">Loading usage...</div>
+  </div>
+</div>
 
 <script>
 let currentSession = null;
-let polling = null;
+let currentPage = 'chat';
+let logsData = [];
+let statusInterval = null;
+let logsInterval = null;
 
+/* ── Helpers ── */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function fmtTokens(n) {
+  if (n == null) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  let parts = [];
+  if (d > 0) parts.push(d + 'd');
+  if (h > 0) parts.push(h + 'h');
+  parts.push(m + 'm');
+  return parts.join(' ');
+}
+
+function fmtMB(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function evtClass(evt) {
+  if (['tool_use', 'error', 'request_in', 'response_out', 'llm_call'].includes(evt)) return evt;
+  return 'default';
+}
+
+/* ── Page switching ── */
+function switchPage(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+
+  // Load data for the new page
+  if (page === 'status') loadStatus();
+  if (page === 'logs') loadLogs();
+  if (page === 'usage') loadUsage();
+
+  // Manage intervals
+  clearInterval(statusInterval);
+  clearInterval(logsInterval);
+  statusInterval = null;
+  logsInterval = null;
+
+  if (page === 'status') {
+    statusInterval = setInterval(loadStatus, 5000);
+  }
+  if (page === 'logs') {
+    logsInterval = setInterval(loadLogs, 3000);
+  }
+}
+
+/* ── Session sidebar ── */
 function sessionLabel(id) {
-  if (id.includes('claude:live-test')) return { label: '🤖 Claude ↔ ARIA', badge: 'LIVE TEST' };
-  if (id.includes('telegram:')) return { label: '📱 Telegram · ' + id.split(':').pop().slice(0, 12), badge: null };
-  if (id.includes('agent:')) return { label: '🛠 Agent · ' + id.split(':').pop().slice(0, 12), badge: null };
-  if (id.includes('mc:')) return { label: '💬 MC · ' + id.split(':').pop().slice(0, 12), badge: null };
+  if (id.includes('claude:live-test')) return { label: 'Claude <> ARIA', badge: 'LIVE TEST' };
+  if (id.includes('telegram:')) return { label: 'Telegram - ' + id.split(':').pop().slice(0, 12), badge: null };
+  if (id.includes('agent:')) return { label: 'Agent - ' + id.split(':').pop().slice(0, 12), badge: null };
+  if (id.includes('mc:')) return { label: 'MC - ' + id.split(':').pop().slice(0, 12), badge: null };
   return { label: id.replace('session:', '').slice(0, 30), badge: null };
 }
 
@@ -201,7 +492,7 @@ async function loadSessions() {
       return `
       <div class="session-item ${s.session_id === currentSession ? 'active' : ''} ${isLiveTest ? 'live-test' : ''}" data-id="${s.session_id}">
         <div>${label}${badge ? ` <span class="badge">${badge}</span>` : ''}</div>
-        <div class="session-meta">${s.msg_count} msgs · ${new Date(s.last_msg * 1000).toLocaleTimeString()}</div>
+        <div class="session-meta">${s.msg_count} msgs - ${new Date(s.last_msg * 1000).toLocaleTimeString()}</div>
       </div>
     `;
     }).join('');
@@ -213,7 +504,6 @@ async function loadSessions() {
       };
     });
     if (!currentSession && sessions.length > 0) {
-      // Auto-select the live-test session if it exists, otherwise most recent
       const liveTest = sessions.find(s => s.session_id.includes('claude:live-test'));
       currentSession = liveTest ? liveTest.session_id : sessions[0].session_id;
       loadSessions();
@@ -222,6 +512,7 @@ async function loadSessions() {
   } catch (e) { console.error(e); }
 }
 
+/* ── Chat messages ── */
 async function loadMessages() {
   if (!currentSession) return;
   try {
@@ -234,20 +525,20 @@ async function loadMessages() {
     container.innerHTML = msgs.map(m => `
       <div class="msg ${m.role}">
         ${escapeHtml(m.content).replace(/\n/g, '<br>')}
-        <div class="msg-meta">${m.role === 'user' ? userLabel : assistantLabel} · ${new Date(m.created_at * 1000).toLocaleTimeString()}</div>
+        <div class="msg-meta">${m.role === 'user' ? userLabel : assistantLabel} - ${new Date(m.created_at * 1000).toLocaleTimeString()}</div>
       </div>
     `).join('');
     container.scrollTop = container.scrollHeight;
 
-    // Update header
     const headerEl = document.querySelector('header.chat-header h1');
     if (headerEl) {
-      if (isLiveTest) headerEl.innerHTML = '🤖 Claude ↔ ARIA · <span style="color:#58cc02;font-size:0.8em">LIVE</span>';
-      else headerEl.innerHTML = '⚡ JarvisM4 Dashboard';
+      if (isLiveTest) headerEl.innerHTML = 'Claude <> ARIA <span style="color:#58cc02;font-size:0.8em">LIVE</span>';
+      else headerEl.innerHTML = 'JarvisM4 Dashboard';
     }
   } catch (e) { console.error(e); }
 }
 
+/* ── Right-panel tool log ── */
 async function loadTools() {
   try {
     const res = await fetch('/api/tool-log');
@@ -260,7 +551,7 @@ async function loadTools() {
       let detail = '';
       if (data.tool) detail = `${data.tool}`;
       else if (data.msgLen !== undefined) detail = `msg: ${data.msgLen} chars`;
-      else if (data.textLen !== undefined) detail = `out: ${data.textLen} chars · ${data.ms}ms`;
+      else if (data.textLen !== undefined) detail = `out: ${data.textLen} chars - ${data.ms}ms`;
       else detail = JSON.stringify(data).slice(0, 80);
       return `
         <div class="tool-event ${event}">
@@ -272,10 +563,42 @@ async function loadTools() {
   } catch (e) { console.error(e); }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+/* ── Quality panel ── */
+async function loadQuality() {
+  try {
+    const res = await fetch('/api/quality?hours=24');
+    const r = await res.json();
+    document.getElementById('quality-summary').innerHTML = `
+      <div class="quality-stat"><strong>${r.avgScore}</strong>Avg score</div>
+      <div class="quality-stat"><strong>${r.total}</strong>Total turns</div>
+      <div class="quality-stat good"><strong>${r.good}</strong>Good</div>
+      <div class="quality-stat warn"><strong>${r.warn}</strong>Warn</div>
+      <div class="quality-stat bad"><strong>${r.bad}</strong>Bad</div>
+      <div class="quality-stat"><strong>${r.total > 0 ? Math.round(r.good / r.total * 100) : 0}%</strong>Pass rate</div>
+    `;
+    document.getElementById('top-issues').innerHTML = r.topIssues.length === 0
+      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No issues yet</div>'
+      : r.topIssues.map(i => `<div class="issue-row"><span>${i.code}</span><span class="count">${i.count}</span></div>`).join('');
+    document.getElementById('recent-bad').innerHTML = r.recentBad.length === 0
+      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No bad responses</div>'
+      : r.recentBad.slice(0, 8).map(b => `
+        <div class="bad-msg">
+          <span class="score">${b.score}/100</span> <span style="color:#6b6f76">${new Date(b.createdAt * 1000).toLocaleTimeString()}</span>
+          <div class="user">User: ${escapeHtml(b.userMsg.slice(0, 100))}</div>
+          <div class="assistant">-> ${escapeHtml(b.assistantMsg.slice(0, 120))}</div>
+          <div class="issues">${b.issues.join(', ')}</div>
+        </div>
+      `).join('');
+  } catch (e) { console.error(e); }
 }
 
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.getElementById('quality-tab').style.display = tab === 'quality' ? 'block' : 'none';
+  document.getElementById('tools-tab').style.display = tab === 'tools' ? 'block' : 'none';
+}
+
+/* ── Send message ── */
 document.getElementById('send').onclick = sendMessage;
 document.getElementById('input').onkeydown = (e) => { if (e.key === 'Enter') sendMessage(); };
 
@@ -289,9 +612,8 @@ async function sendMessage() {
   btn.disabled = true;
   btn.textContent = 'Sending...';
 
-  // Show user message immediately
   const container = document.getElementById('messages');
-  container.innerHTML += `<div class="msg user">${escapeHtml(msg).replace(/\n/g, '<br>')}<div class="msg-meta">user · just now</div></div>`;
+  container.innerHTML += `<div class="msg user">${escapeHtml(msg).replace(/\n/g, '<br>')}<div class="msg-meta">user - just now</div></div>`;
   container.innerHTML += `<div class="thinking-indicator" id="thinking">JarvisM4 is thinking</div>`;
   container.scrollTop = container.scrollHeight;
 
@@ -305,13 +627,12 @@ async function sendMessage() {
     document.getElementById('thinking')?.remove();
 
     if (data.reply) {
-      container.innerHTML += `<div class="msg assistant">${escapeHtml(data.reply).replace(/\n/g, '<br>')}<div class="msg-meta">assistant · ${data.elapsed}s · ${data.taskType}</div></div>`;
+      container.innerHTML += `<div class="msg assistant">${escapeHtml(data.reply).replace(/\n/g, '<br>')}<div class="msg-meta">assistant - ${data.elapsed}s - ${data.taskType}</div></div>`;
       container.scrollTop = container.scrollHeight;
     } else {
       container.innerHTML += `<div class="msg assistant" style="background:#3a1a1a;color:#ef4444">Error: ${escapeHtml(data.error || 'Unknown error')}</div>`;
     }
 
-    // Reload sessions to pick up the new dashboard session
     loadSessions();
   } catch (e) {
     document.getElementById('thinking')?.remove();
@@ -323,51 +644,184 @@ async function sendMessage() {
   input.focus();
 }
 
-async function loadQuality() {
+/* ── Status Page ── */
+async function loadStatus() {
   try {
-    const res = await fetch('/api/quality?hours=24');
-    const r = await res.json();
-    document.getElementById('quality-summary').innerHTML = `
-      <div class="quality-stat"><strong>${r.avgScore}</strong>Avg score</div>
-      <div class="quality-stat"><strong>${r.total}</strong>Total turns</div>
-      <div class="quality-stat good"><strong>${r.good}</strong>✓ Good</div>
-      <div class="quality-stat warn"><strong>${r.warn}</strong>⚠ Warn</div>
-      <div class="quality-stat bad"><strong>${r.bad}</strong>✗ Bad</div>
-      <div class="quality-stat"><strong>${r.total > 0 ? Math.round(r.good / r.total * 100) : 0}%</strong>Pass rate</div>
-    `;
-    document.getElementById('top-issues').innerHTML = r.topIssues.length === 0
-      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No issues yet</div>'
-      : r.topIssues.map(i => `<div class="issue-row"><span>${i.code}</span><span class="count">${i.count}</span></div>`).join('');
-    document.getElementById('recent-bad').innerHTML = r.recentBad.length === 0
-      ? '<div style="color:#6b6f76;font-size:0.7rem;padding:8px">No bad responses 🎉</div>'
-      : r.recentBad.slice(0, 8).map(b => `
-        <div class="bad-msg">
-          <span class="score">${b.score}/100</span> <span style="color:#6b6f76">${new Date(b.createdAt * 1000).toLocaleTimeString()}</span>
-          <div class="user">User: ${escapeHtml(b.userMsg.slice(0, 100))}</div>
-          <div class="assistant">→ ${escapeHtml(b.assistantMsg.slice(0, 120))}</div>
-          <div class="issues">${b.issues.join(', ')}</div>
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    const container = document.getElementById('status-content');
+
+    const poolsHtml = (s.pools || []).map(p => {
+      const avail = p.available || 0;
+      const total = p.total || 0;
+      const exhausted = p.exhausted || 0;
+      const indicatorClass = exhausted > 0 ? (avail > 0 ? 'warn' : 'bad') : 'ok';
+      const exhaustedHtml = (p.exhaustedEntries || []).map(e =>
+        `<div style="font-size:0.7rem;color:#ef4444;padding:2px 0;margin-left:14px">${escapeHtml(e.key || e.provider || 'key')} -- resets ${e.resetAt ? new Date(e.resetAt).toLocaleTimeString() : 'unknown'}</div>`
+      ).join('');
+      return `
+        <div class="pool-card">
+          <div class="provider"><span class="pool-indicator ${indicatorClass}"></span>${escapeHtml(p.provider)}</div>
+          <div class="pool-row"><span class="pool-label">Total keys</span><span class="pool-val">${total}</span></div>
+          <div class="pool-row"><span class="pool-label">Available</span><span class="pool-val" style="color:${avail > 0 ? '#58cc02' : '#ef4444'}">${avail}</span></div>
+          <div class="pool-row"><span class="pool-label">Exhausted</span><span class="pool-val" style="color:${exhausted > 0 ? '#ef4444' : '#58cc02'}">${exhausted}</span></div>
+          ${exhaustedHtml}
         </div>
-      `).join('');
+      `;
+    }).join('');
+
+    container.innerHTML = `
+      <div class="status-hero">${escapeHtml(s.model || 'unknown')}</div>
+      <div class="status-sub">PID ${s.pid || '?'} - Node ${escapeHtml(s.node || '?')}</div>
+      <div class="status-grid">
+        <div class="stat-card">
+          <div class="label">Uptime</div>
+          <div class="value green">${fmtUptime(s.uptime || 0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">RSS Memory</div>
+          <div class="value">${s.memory ? fmtMB(s.memory.rss) : '?'}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Heap Used</div>
+          <div class="value">${s.memory ? fmtMB(s.memory.heap) : '?'}</div>
+        </div>
+      </div>
+      <h2 style="font-size:0.7rem;text-transform:uppercase;color:#6b6f76;letter-spacing:1.5px;margin-bottom:14px">Provider Pools</h2>
+      <div class="pool-cards">${poolsHtml || '<div style="color:#6b6f76;font-size:0.8rem">No pool data</div>'}</div>
+    `;
+  } catch (e) {
+    document.getElementById('status-content').innerHTML = `<div style="color:#ef4444;font-size:0.85rem">Failed to load status: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+/* ── Logs Page ── */
+async function loadLogs() {
+  try {
+    const res = await fetch('/api/tool-log');
+    logsData = await res.json();
+    renderLogs();
   } catch (e) { console.error(e); }
 }
 
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  document.getElementById('quality-tab').style.display = tab === 'quality' ? 'block' : 'none';
-  document.getElementById('tools-tab').style.display = tab === 'tools' ? 'block' : 'none';
+function renderLogs() {
+  const filter = document.getElementById('logs-filter').value;
+  const search = document.getElementById('logs-search').value.toLowerCase();
+
+  let filtered = logsData;
+  if (filter) filtered = filtered.filter(e => e.event === filter);
+  if (search) {
+    filtered = filtered.filter(e => {
+      const hay = [e.corr, e.tool, e.model, e.thread, e.event, JSON.stringify(e)].join(' ').toLowerCase();
+      return hay.includes(search);
+    });
+  }
+
+  const rows = filtered.slice(-200).reverse();
+  const tbody = document.getElementById('logs-body');
+  tbody.innerHTML = rows.map(e => {
+    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    const evt = e.event || 'event';
+    const cls = evtClass(evt);
+
+    let details = [];
+    if (e.tool) details.push('tool: ' + e.tool);
+    if (e.model) details.push('model: ' + e.model);
+    if (e.inputTokens != null) details.push('in: ' + fmtTokens(e.inputTokens));
+    if (e.outputTokens != null) details.push('out: ' + fmtTokens(e.outputTokens));
+    if (e.ms != null) details.push(e.ms + 'ms');
+    if (e.data) {
+      const d = e.data;
+      if (d.tool) details.push('tool: ' + d.tool);
+      if (d.msgLen != null) details.push('msg: ' + d.msgLen + ' chars');
+      if (d.textLen != null) details.push('out: ' + d.textLen + ' chars');
+      if (d.ms != null) details.push(d.ms + 'ms');
+    }
+    if (details.length === 0) {
+      const raw = JSON.stringify(e);
+      if (raw.length > 2) details.push(raw.slice(0, 120));
+    }
+
+    return `<tr>
+      <td style="white-space:nowrap;color:#6b6f76">${ts}</td>
+      <td><span class="evt-badge ${cls}">${escapeHtml(evt)}</span></td>
+      <td style="color:#6b6f76;font-size:0.68rem">${escapeHtml((e.corr || '').slice(0, 12))}</td>
+      <td style="color:#6b6f76;font-size:0.68rem">${escapeHtml((e.thread || '').slice(0, 12))}</td>
+      <td class="log-detail">${escapeHtml(details.join(' | '))}</td>
+    </tr>`;
+  }).join('');
 }
 
-// Initial load
+document.getElementById('logs-filter').onchange = renderLogs;
+document.getElementById('logs-search').oninput = renderLogs;
+
+/* ── Usage Page ── */
+async function loadUsage() {
+  const days = document.getElementById('usage-days').value;
+  try {
+    const res = await fetch('/api/usage?days=' + days);
+    const u = await res.json();
+    const container = document.getElementById('usage-content');
+
+    // By model cards
+    const byModel = u.byModel || {};
+    const modelCards = Object.entries(byModel).map(([model, d]) => `
+      <div class="model-card">
+        <div class="model-name">${escapeHtml(model)}</div>
+        <div class="model-stat"><span class="ml">Input tokens</span><span class="mv">${fmtTokens(d.input)}</span></div>
+        <div class="model-stat"><span class="ml">Output tokens</span><span class="mv">${fmtTokens(d.output)}</span></div>
+        <div class="model-stat"><span class="ml">Requests</span><span class="mv">${d.requests || 0}</span></div>
+      </div>
+    `).join('');
+
+    // By day table
+    const byDay = u.byDay || {};
+    const dayRows = Object.entries(byDay)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, d]) => `
+        <tr>
+          <td>${date}</td>
+          <td class="num">${d.requests || 0}</td>
+          <td class="num">${fmtTokens(d.input)}</td>
+          <td class="num">${fmtTokens(d.output)}</td>
+          <td class="num">${fmtTokens((d.input || 0) + (d.output || 0))}</td>
+        </tr>
+      `).join('');
+
+    container.innerHTML = `
+      <div class="usage-section-title">By Model</div>
+      <div class="model-cards">
+        ${modelCards || '<div style="color:#6b6f76;font-size:0.8rem">No model data</div>'}
+      </div>
+      <div class="usage-section-title">By Day</div>
+      <table class="usage-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:right">Requests</th>
+            <th style="text-align:right">Input</th>
+            <th style="text-align:right">Output</th>
+            <th style="text-align:right">Total</th>
+          </tr>
+        </thead>
+        <tbody>${dayRows || '<tr><td colspan="5" style="color:#6b6f76">No data</td></tr>'}</tbody>
+      </table>
+    `;
+  } catch (e) {
+    document.getElementById('usage-content').innerHTML = `<div style="color:#ef4444;font-size:0.85rem">Failed to load usage: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+/* ── Initial load + polling ── */
 loadSessions();
 loadTools();
 loadQuality();
 
-// Adaptive polling: faster when viewing live-test session
 setInterval(loadTools, 3000);
 setInterval(() => {
   if (!currentSession) return;
   loadMessages();
-}, 2000); // Poll messages every 2s for live visibility
+}, 2000);
 setInterval(loadSessions, 5000);
 setInterval(loadQuality, 15000);
 </script>

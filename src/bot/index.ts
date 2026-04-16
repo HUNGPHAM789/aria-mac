@@ -268,6 +268,62 @@ async function main() {
       return;
     }
 
+    // ─── Dashboard: system status ──
+    if (req.method === 'GET' && req.url === '/api/status') {
+      try {
+        const { poolSnapshot } = await import('../aria/core.js');
+        const { getModel } = await import('../db/index.js');
+        const uptime = process.uptime();
+        const mem = process.memoryUsage();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          model: getModel(),
+          uptime: Math.floor(uptime),
+          memory: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
+          pools: poolSnapshot(),
+          node: process.version,
+          pid: process.pid,
+        }));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
+    // ─── Dashboard: usage/cost summary ──
+    if (req.method === 'GET' && req.url?.startsWith('/api/usage')) {
+      try {
+        const { readFileSync: rfs, existsSync: exs, readdirSync } = await import('fs');
+        const { join: jn } = await import('path');
+        const url = new URL(req.url, 'http://localhost');
+        const days = parseInt(url.searchParams.get('days') ?? '7', 10);
+        const logDir = jn(process.cwd(), 'data', 'logs');
+        const byModel: Record<string, { input: number; output: number; requests: number }> = {};
+        const byDay: Record<string, { input: number; output: number; requests: number }> = {};
+        const now = Date.now();
+        for (let d = 0; d < days; d++) {
+          const date = new Date(now - d * 86400_000).toISOString().slice(0, 10);
+          const path = jn(logDir, `${date}.jsonl`);
+          if (!exs(path)) continue;
+          for (const line of rfs(path, 'utf-8').trim().split('\n')) {
+            if (!line) continue;
+            try {
+              const ev = JSON.parse(line) as Record<string, unknown>;
+              if (ev.event !== 'request_out') continue;
+              const model = (ev.model as string) || 'unknown';
+              const inp = (ev.input_tokens as number) || 0;
+              const out = (ev.output_tokens as number) || 0;
+              const m = byModel[model] ??= { input: 0, output: 0, requests: 0 };
+              m.input += inp; m.output += out; m.requests++;
+              const dd = byDay[date] ??= { input: 0, output: 0, requests: 0 };
+              dd.input += inp; dd.output += out; dd.requests++;
+            } catch { /* skip */ }
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ days, byModel, byDay }));
+      } catch (err) { res.writeHead(500); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
     // ─── Dashboard: send message as user (Claude ↔ ARIA live test) ──
     if (req.method === 'POST' && req.url === '/api/dashboard/send') {
       let body = '';
